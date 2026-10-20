@@ -1,26 +1,32 @@
 name: Release
 
 # Pushing a tag vX.Y.Z builds, tests and publishes the release:
-#   installer (x64 + ARM64), portable zips and SHA-256 checksums.
+#   installer (x64 + ARM64), portable zips, the sensors update package and SHA-256 checksums.
+# The build runs with a read-only token (third-party build tools and packages never see a token that can
+# publish); only the small publish job can write, and it runs nothing but `gh release create`.
 on:
   push:
     tags: ['v*.*.*']
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  build:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Check that the tag matches the project version
         shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}  # passed as data, never pasted into the script
         run: |
           $version = & tools/version.ps1
-          if ("v$version" -ne "${{ github.ref_name }}") {
-            throw "Tag ${{ github.ref_name }} does not match CMakeLists.txt version $version"
+          if ("v$version" -ne $env:TAG) {
+            throw "Tag $env:TAG does not match CMakeLists.txt version $version"
           }
           "VERSION=$version" >> $env:GITHUB_ENV
 
@@ -39,10 +45,30 @@ jobs:
         shell: pwsh
         run: tools/release-notes.ps1 -Version $env:VERSION -Out dist/RELEASE_NOTES.md
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
       - name: Publish
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
-          $files = Get-ChildItem dist -File | Where-Object { $_.Name -ne 'RELEASE_NOTES.md' } | ForEach-Object FullName
-          gh release create "${{ github.ref_name }}" $files --title "sys-bar $env:VERSION" --notes-file dist/RELEASE_NOTES.md --verify-tag
+          version="${TAG#v}"
+          files=$(find dist -maxdepth 1 -type f ! -name RELEASE_NOTES.md)
+          gh release create "$TAG" $files --repo "$REPO" --title "sys-bar $version" \
+            --notes-file dist/RELEASE_NOTES.md --verify-tag

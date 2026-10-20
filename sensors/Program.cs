@@ -55,6 +55,12 @@ namespace SysBar.Sensors
                         Console.WriteLine("Run from an elevated terminal: reading sensors requires administrator rights.");
                         return Installer.ExitNotAdmin;
                     }
+                    if (Installer.ServiceRunning())
+                    {
+                        // Two writers would corrupt the shared block (it has a single-writer sequence lock).
+                        Console.WriteLine("The SysBarSensors service is running: stop it first (sc stop SysBarSensors).");
+                        return Installer.ExitFailed;
+                    }
                     TimeSpan? duration = args.Length > 1 && int.TryParse(args[1], out int seconds) && seconds > 0
                         ? TimeSpan.FromSeconds(seconds)
                         : (TimeSpan?)null;

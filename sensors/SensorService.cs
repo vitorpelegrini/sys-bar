@@ -16,8 +16,10 @@ namespace SysBar.Sensors
         private static readonly TimeSpan ReleaseAfter = TimeSpan.FromMinutes(5);
         private static readonly TimeSpan MinInterval = TimeSpan.FromMilliseconds(750);
         private static readonly TimeSpan UpdateCooldown = TimeSpan.FromMinutes(10);  // at most one GitHub check per 10 min
+        private static readonly TimeSpan EventRetry = TimeSpan.FromSeconds(30);
 
         private readonly ManualResetEvent _stop = new ManualResetEvent(false);
+        private readonly ManualResetEvent _never = new ManualResetEvent(false);  // stands in for a missing event
         private Thread? _worker;
         private Timer? _consoleTimer;  // field: a local timer could be collected before it fires
 
@@ -68,23 +70,32 @@ namespace SysBar.Sensors
             SharedBlock? block = null;
             EventWaitHandle? wanted = null;
             EventWaitHandle? updateRequest = null;
-            DateTime lastUpdateCheck = DateTime.MinValue;
+            // Monotonic clock: a clock change (NTP, a user) must not freeze sampling or the update cooldown.
+            var clock = Stopwatch.StartNew();
+            TimeSpan never = TimeSpan.FromDays(-1);
+            TimeSpan lastUpdateCheck = never, lastEventAttempt = never;
             int updating = 0;
             SensorReader? reader = null;
             try
             {
                 block = new SharedBlock();
-                wanted = SharedBlock.CreateWantedEvent();
-                updateRequest = SharedBlock.CreateClientEvent(SelfUpdate.UpdateEventName);
-                DateTime lastWanted = Log.ToConsole ? DateTime.UtcNow : DateTime.MinValue;
-                DateTime lastRead = DateTime.MinValue;
-                var handles = new WaitHandle[] { _stop, wanted, updateRequest };
+                TimeSpan lastWanted = Log.ToConsole ? clock.Elapsed : never;
+                TimeSpan lastRead = never;
 
                 while (true)
                 {
+                    // The events are (re)created until they exist: a name taken by another account only delays
+                    // us, it never takes the service down.
+                    if ((wanted == null || updateRequest == null) && clock.Elapsed - lastEventAttempt >= EventRetry)
+                    {
+                        lastEventAttempt = clock.Elapsed;
+                        wanted ??= SharedBlock.CreateWantedEvent();
+                        updateRequest ??= SharedBlock.CreateClientEvent(SelfUpdate.UpdateEventName);
+                    }
+                    var handles = new WaitHandle[] { _stop, (WaitHandle?)wanted ?? _never, (WaitHandle?)updateRequest ?? _never };
                     int signaled = WaitHandle.WaitAny(handles, TimeSpan.FromSeconds(1));
                     if (signaled == 0) break;
-                    DateTime now = DateTime.UtcNow;
+                    TimeSpan now = clock.Elapsed;
                     if (signaled == 2)
                     {
                         // sys-bar found this service older than itself: look for an update (rate-limited).
@@ -121,7 +132,7 @@ namespace SysBar.Sensors
                         catch (Exception e)
                         {
                             Log.Write($"read failed: {e.GetType().Name}: {e.Message}");
-                            reader?.Dispose();
+                            SafeDispose(reader);
                             reader = null;
                             _stop.WaitOne(TimeSpan.FromSeconds(5));
                         }
@@ -129,7 +140,7 @@ namespace SysBar.Sensors
                     else if (reader != null && now - lastWanted > ReleaseAfter)
                     {
                         // Nobody has asked for a while: release the driver handles until needed again.
-                        reader.Dispose();
+                        SafeDispose(reader);
                         reader = null;
                         Log.Write("idle: sensors released");
                     }
@@ -142,11 +153,23 @@ namespace SysBar.Sensors
             }
             finally
             {
-                reader?.Dispose();
+                SafeDispose(reader);
                 wanted?.Dispose();
                 updateRequest?.Dispose();
                 block?.Dispose();
                 Log.Write("service stopped");
+            }
+        }
+
+        private static void SafeDispose(IDisposable? disposable)
+        {
+            try
+            {
+                disposable?.Dispose();
+            }
+            catch (Exception e)
+            {
+                Log.Write($"dispose failed: {e.GetType().Name}: {e.Message}");
             }
         }
 

@@ -51,8 +51,24 @@ foreach ($arch in $Architectures) {
 
     # Advanced sensors service (x64 only: the PawnIO driver has no ARM64 build).
     if ($arch -eq 'x64') {
+        # The installer pins PawnIO by hash too: both pins must agree.
+        if (-not (Select-String -Path sensors/Installer.cs -Pattern $PawnIOSha256 -SimpleMatch -Quiet)) {
+            throw 'sensors/Installer.cs does not pin the same PawnIO hash as package.ps1'
+        }
         dotnet build sensors/SysBar.Sensors.csproj -c Release -nologo -v q "-p:SysBarVersion=$version" | Out-Host
         if ($LASTEXITCODE) { throw 'sensors build failed' }
+        # Second pass: embed the SHA-256 of every shipped library in the executable (sensors/Manifest.cs). The
+        # libraries do not change between the two builds; only the executable gains the manifest.
+        $manifest = Join-Path $root 'sensors/obj/manifest.txt'
+        Get-ChildItem sensors/bin/Release -File | Where-Object { $_.Extension -in '.dll', '.config' } | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"
+        } | Set-Content $manifest -Encoding ascii
+        dotnet build sensors/SysBar.Sensors.csproj -c Release -nologo -v q "-p:SysBarVersion=$version" "-p:SysBarManifest=$manifest" | Out-Host
+        if ($LASTEXITCODE) { throw 'sensors build (with manifest) failed' }
+        Get-ChildItem sensors/bin/Release -File | Where-Object { $_.Extension -in '.dll', '.config' } | ForEach-Object {
+            $line = "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant())  $($_.Name)"
+            if (-not (Select-String -Path $manifest -Pattern $line -SimpleMatch -Quiet)) { throw "library changed between builds: $($_.Name)" }
+        }
         $sensors = Join-Path $stage 'sensors'
         New-Item -ItemType Directory -Force $sensors | Out-Null
         Get-ChildItem sensors/bin/Release -File | Where-Object { $_.Extension -in '.exe', '.dll', '.config' } |

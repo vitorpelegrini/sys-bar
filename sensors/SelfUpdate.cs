@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
@@ -13,6 +14,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.ServiceProcess;
 using System.Text;
 using System.Threading;
+using Microsoft.Win32;
 
 namespace SysBar.Sensors
 {
@@ -34,6 +36,9 @@ namespace SysBar.Sensors
         public const string UpdateEventName = @"Global\SysBarSensorsUpdate";
         private const string ReleasesApi = "https://api.github.com/repos/vitorpelegrini/sys-bar/releases/latest";
         private const long MaxPackageBytes = 64L * 1024 * 1024;
+        private static readonly TimeSpan DownloadTimeout = TimeSpan.FromMinutes(3);
+        private static readonly TimeSpan FailureBackoff = TimeSpan.FromHours(24);
+        private const string StateKey = @"SOFTWARE\sys-bar\sensors";  // HKLM: administrators/SYSTEM only
         private static readonly string[] AllowedExtensions = { ".exe", ".dll", ".config" };
 
         private static string Root =>
@@ -98,6 +103,11 @@ namespace SysBar.Sensors
                 Log.Write($"update: up to date ({Current.ToString(3)})");
                 return;
             }
+            if (RecentlyFailed(latest))
+            {
+                Log.Write($"update: {latest.ToString(3)} failed recently, retrying later");
+                return;
+            }
 
             string package = $"sys-bar-{latest.ToString(3)}-sensors-x64.zip";
             string? zipUrl = release.Assets?.FirstOrDefault(a => a.Name == package)?.Url;
@@ -108,38 +118,54 @@ namespace SysBar.Sensors
                 return;
             }
 
-            string expected = ParseSha256(http.GetStringAsync(hashUrl).GetAwaiter().GetResult(), package)
-                ?? throw new InvalidDataException("malformed checksum file");
-            ResetStaging();
-            string zip = Path.Combine(Staging, package);
-            using (Stream source = http.GetStreamAsync(zipUrl).GetAwaiter().GetResult())
-            using (FileStream target = File.Create(zip))
+            try
             {
-                CopyLimited(source, target, MaxPackageBytes);
+                string expected = ParseSha256(http.GetStringAsync(hashUrl).GetAwaiter().GetResult(), package)
+                    ?? throw new InvalidDataException("malformed checksum file");
+                ResetStaging();
+                string zip = Path.Combine(Staging, package);
+                // The whole download has a deadline: a stalled connection must not block every later update.
+                using (var cancel = new CancellationTokenSource(DownloadTimeout))
+                using (HttpResponseMessage response = http.GetAsync(zipUrl, HttpCompletionOption.ResponseHeadersRead, cancel.Token).GetAwaiter().GetResult())
+                {
+                    response.EnsureSuccessStatusCode();
+                    using Stream source = response.Content.ReadAsStreamAsync().GetAwaiter().GetResult();
+                    using FileStream target = File.Create(zip);
+                    CopyLimited(source, target, MaxPackageBytes, cancel.Token);
+                }
+                Log.Write($"update: downloaded {package}");
+                InstallFrom(zip, expected, latest);
             }
-            Log.Write($"update: downloaded {package}");
-            InstallFrom(zip, expected, latest);
+            catch (Exception)
+            {
+                RecordFailure(latest);
+                throw;
+            }
         }
 
         /// <summary>Verifies a package, extracts it into staging and launches the apply step.</summary>
         public static void InstallFrom(string zip, string expectedSha256, Version version, bool wait = false)
         {
-            string actual = Sha256(zip);
+            // The package is read once, from a copy in the administrators-only staging folder: a file given on
+            // the command line (a user-writable Downloads folder) cannot be swapped after it was checked.
+            Directory.CreateDirectory(Staging);
+            byte[] package = Manifest.ReadLocked(zip);
+            string actual = Manifest.Sha256(package);
             if (!string.Equals(actual, expectedSha256, StringComparison.OrdinalIgnoreCase))
                 throw new InvalidDataException($"checksum mismatch: {actual}");
 
             if (Directory.Exists(StagedFiles)) Directory.Delete(StagedFiles, recursive: true);
             Directory.CreateDirectory(StagedFiles);
-            using (ZipArchive archive = ZipFile.OpenRead(zip))
+            using (var archive = new ZipArchive(new MemoryStream(package), ZipArchiveMode.Read))
             {
                 foreach (ZipArchiveEntry entry in archive.Entries)
                 {
                     // Flat packages only, known file types only: no path traversal, nothing unexpected.
                     string name = entry.FullName;
+                    if (name.Equals("PawnIO_setup.exe", StringComparison.OrdinalIgnoreCase)) continue;
                     if (name.IndexOfAny(new[] { '/', '\\', ':' }) >= 0 ||
                         !AllowedExtensions.Contains(Path.GetExtension(name).ToLowerInvariant()))
                     {
-                        if (name.EndsWith("PawnIO_setup.exe", StringComparison.OrdinalIgnoreCase)) continue;
                         throw new InvalidDataException($"unexpected entry {name}");
                     }
                     entry.ExtractToFile(Path.Combine(StagedFiles, name), overwrite: true);
@@ -147,15 +173,31 @@ namespace SysBar.Sensors
             }
 
             string staged = Path.Combine(StagedFiles, "sys-bar-sensors.exe");
-            string fileVersion = FileVersionInfo.GetVersionInfo(staged).FileVersion ?? "";
-            if (!fileVersion.StartsWith(version.ToString(3), StringComparison.Ordinal))
-                throw new InvalidDataException($"package version {fileVersion} does not match {version.ToString(3)}");
+            if (!Version.TryParse(FileVersionInfo.GetVersionInfo(staged).FileVersion ?? "", out Version? fileVersion) ||
+                fileVersion.Major != version.Major || fileVersion.Minor != version.Minor || fileVersion.Build != version.Build)
+            {
+                throw new InvalidDataException($"package version does not match {version.ToString(3)}");
+            }
 
-            // Once releases are code-signed, an update must carry a valid signature from the same publisher.
+            // Once releases are code-signed, an update must carry a valid signature from the same publisher,
+            // and every library must match the manifest inside that signed executable (third-party libraries
+            // are not signed themselves).
             string current = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "sys-bar-sensors.exe");
             string? publisher = Publisher(current);
-            if (publisher != null && (!TrustedSignature(staged) || Publisher(staged) != publisher))
-                throw new InvalidDataException("update is not signed by the current publisher");
+            if (publisher != null)
+            {
+                if (!TrustedSignature(staged) || Publisher(staged) != publisher)
+                    throw new InvalidDataException("update is not signed by the current publisher");
+                Dictionary<string, string> manifest = Manifest.LoadFrom(staged)
+                    ?? throw new InvalidDataException("signed update without a manifest");
+                foreach (string file in Directory.GetFiles(StagedFiles))
+                {
+                    string name = Path.GetFileName(file);
+                    if (name.Equals("sys-bar-sensors.exe", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!manifest.TryGetValue(name, out string? hash) || Manifest.Sha256(File.ReadAllBytes(file)) != hash)
+                        throw new InvalidDataException($"{name} does not match the signed manifest");
+                }
+            }
 
             Log.Write($"update: staged {version.ToString(3)}, applying");
             using Process? process = Process.Start(new ProcessStartInfo(staged, "--apply-update")
@@ -177,6 +219,7 @@ namespace SysBar.Sensors
                 return Installer.ExitFailed;
             }
             using var service = new ServiceController(SensorService.Name);
+            string backup = Path.Combine(Staging, "previous");
             try
             {
                 if (service.Status != ServiceControllerStatus.Stopped)
@@ -184,10 +227,26 @@ namespace SysBar.Sensors
                     service.Stop();
                     service.WaitForStatus(ServiceControllerStatus.Stopped, TimeSpan.FromSeconds(30));
                 }
-                Thread.Sleep(500);  // let the old process release its files
-                foreach (string file in Directory.GetFiles(source))
+                Installer.WaitForServiceExit();  // its files are only free once the process is gone
+                // All or nothing: the current files are kept aside and put back if any copy fails, so the
+                // service never runs a mix of two versions.
+                if (Directory.Exists(backup)) Directory.Delete(backup, recursive: true);
+                Directory.CreateDirectory(backup);
+                foreach (string file in Directory.GetFiles(Target)) File.Copy(file, Path.Combine(backup, Path.GetFileName(file)));
+                try
                 {
-                    File.Copy(file, Path.Combine(Target, Path.GetFileName(file)), overwrite: true);
+                    foreach (string file in Directory.GetFiles(source))
+                    {
+                        File.Copy(file, Path.Combine(Target, Path.GetFileName(file)), overwrite: true);
+                    }
+                }
+                catch (Exception)
+                {
+                    foreach (string file in Directory.GetFiles(backup))
+                    {
+                        File.Copy(file, Path.Combine(Target, Path.GetFileName(file)), overwrite: true);
+                    }
+                    throw;
                 }
                 Log.Write($"apply-update: installed {Current.ToString(3)}");
                 return Installer.ExitOk;
@@ -195,6 +254,7 @@ namespace SysBar.Sensors
             catch (Exception e)
             {
                 Log.Write($"apply-update failed: {e.Message}");
+                RecordFailure(Current);
                 return Installer.ExitFailed;
             }
             finally
@@ -231,6 +291,36 @@ namespace SysBar.Sensors
             Directory.CreateDirectory(Staging);  // inherits the Program Files ACL: administrators/SYSTEM only
         }
 
+        private static bool RecentlyFailed(Version version)
+        {
+            try
+            {
+                using RegistryKey? key = Registry.LocalMachine.OpenSubKey(StateKey);
+                if (key?.GetValue("FailedVersion") as string != version.ToString(3)) return false;
+                long at = Convert.ToInt64(key.GetValue("FailedAt") ?? 0L);
+                return DateTimeOffset.UtcNow - DateTimeOffset.FromUnixTimeSeconds(at) < FailureBackoff;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>A failed version is not tried again for a day (no download/restart loop every 10 minutes).</summary>
+        private static void RecordFailure(Version version)
+        {
+            try
+            {
+                using RegistryKey key = Registry.LocalMachine.CreateSubKey(StateKey);
+                key.SetValue("FailedVersion", version.ToString(3));
+                key.SetValue("FailedAt", DateTimeOffset.UtcNow.ToUnixTimeSeconds(), RegistryValueKind.QWord);
+            }
+            catch (Exception)
+            {
+                // Best effort.
+            }
+        }
+
         private static Version? ParseTag(string? tag)
         {
             if (tag == null || !tag.StartsWith("v", StringComparison.Ordinal)) return null;
@@ -251,19 +341,12 @@ namespace SysBar.Sensors
             return rest.Length == 0 || rest.Equals(fileName, StringComparison.OrdinalIgnoreCase) ? hex.ToLowerInvariant() : null;
         }
 
-        private static string Sha256(string file)
-        {
-            using var sha = SHA256.Create();
-            using FileStream stream = File.OpenRead(file);
-            return string.Concat(sha.ComputeHash(stream).Select(b => b.ToString("x2")));
-        }
-
-        private static void CopyLimited(Stream source, Stream target, long limit)
+        private static void CopyLimited(Stream source, Stream target, long limit, CancellationToken cancel)
         {
             var buffer = new byte[81920];
             long total = 0;
             int read;
-            while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
+            while ((read = source.ReadAsync(buffer, 0, buffer.Length, cancel).GetAwaiter().GetResult()) > 0)
             {
                 total += read;
                 if (total > limit) throw new InvalidDataException("package too large");

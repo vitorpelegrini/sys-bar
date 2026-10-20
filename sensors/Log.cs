@@ -4,14 +4,15 @@ using System.IO;
 namespace SysBar.Sensors
 {
     /// <summary>
-    /// Small diagnostic log next to the binaries (Program Files: only administrators and SYSTEM can write
-    /// there, unlike ProgramData, which would expose the SYSTEM service to link attacks).
+    /// Small diagnostic log in the installed folder, always (Program Files: only administrators and SYSTEM
+    /// can write there, unlike ProgramData or the per-user copy the elevated installer starts from, which
+    /// would expose elevated code to link attacks). The staged updater logs there too, so it survives.
     /// </summary>
     internal static class Log
     {
         private const long MaxBytes = 256 * 1024;
         private static readonly object Gate = new object();
-        private static readonly string FilePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "sensors.log");
+        private static readonly string FilePath = Path.Combine(Installer.Target, "sensors.log");
 
         public static bool ToConsole { get; set; }
 
@@ -23,6 +24,7 @@ namespace SysBar.Sensors
             {
                 try
                 {
+                    if (!Directory.Exists(Installer.Target)) return;  // nothing installed yet: nowhere safe to write
                     var info = new FileInfo(FilePath);
                     if (info.Exists && info.Length > MaxBytes) info.Delete();
                     File.AppendAllText(FilePath, line + Environment.NewLine);

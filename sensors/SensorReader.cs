@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using LibreHardwareMonitor.Hardware;
 
@@ -11,8 +12,9 @@ namespace SysBar.Sensors
         private static readonly TimeSpan StorageInterval = TimeSpan.FromSeconds(10);  // SMART queries are slow
         private static readonly TimeSpan GpuInterval = TimeSpan.FromSeconds(3);       // only its fan, which is slow
         private readonly Computer _computer;
-        private DateTime _lastStorageUpdate = DateTime.MinValue;
-        private DateTime _lastGpuUpdate = DateTime.MinValue;
+        private readonly Stopwatch _clock = Stopwatch.StartNew();  // monotonic: immune to clock changes
+        private TimeSpan _lastStorageUpdate = TimeSpan.FromDays(-1);
+        private TimeSpan _lastGpuUpdate = TimeSpan.FromDays(-1);
 
         public SensorReader()
         {
@@ -38,7 +40,7 @@ namespace SysBar.Sensors
             var readings = new List<Reading>();
             var boardFans = new List<(IHardware item, string name, float rpm)>();
             float cpu = float.NaN;
-            DateTime now = DateTime.UtcNow;
+            TimeSpan now = _clock.Elapsed;
             bool refreshStorage = now - _lastStorageUpdate >= StorageInterval;
             if (refreshStorage) _lastStorageUpdate = now;
             bool refreshGpu = now - _lastGpuUpdate >= GpuInterval;
@@ -89,15 +91,15 @@ namespace SysBar.Sensors
                     }
                 }
             }
+            // Boards LibreHardwareMonitor does not know report "Fan #1", "Fan #2"...: fall back on the reference
+            // wiring of the main Super I/O chip (the first one; secondary chips only drive extra headers), or on
+            // the only fan spinning on it (a desktop always has its CPU fan connected).
+            IHardware? mainChip = boardFans.Select(f => f.item).FirstOrDefault(h => h.HardwareType == HardwareType.SuperIO);
+            int mainChipFans = boardFans.Count(f => f.item == mainChip);
             foreach (var (item, name, rpm) in boardFans)
             {
                 Role role = item.HardwareType == HardwareType.Psu ? Role.Psu : FanRoles.FromName(name);
-                // Boards LibreHardwareMonitor does not know report "Fan #1", "Fan #2"...: fall back on the Super I/O
-                // reference wiring, or on the only fan there is (a desktop always has its CPU fan connected).
-                if (role == Role.Unknown && item.HardwareType == HardwareType.SuperIO)
-                {
-                    role = FanRoles.FromChip(item.Name, name, boardFans.Count(f => f.item.HardwareType == HardwareType.SuperIO));
-                }
+                if (role == Role.Unknown && item == mainChip) role = FanRoles.FromChip(item.Name, name, mainChipFans);
                 readings.Add(new Reading(Kind.Fan, Group.Board, name, rpm, role));
             }
             if (!float.IsNaN(cpu)) readings.Insert(0, new Reading(Kind.Temperature, Group.Cpu, "CPU", cpu));

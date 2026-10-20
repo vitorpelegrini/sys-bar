@@ -1361,7 +1361,16 @@ std::wstring App::SensorsTool() const {
 
 // Runs the service installer elevated (UAC) on a worker thread and reports back with WM_APP_SENSORS.
 void App::RunSensorsTool(bool install) {
-    const std::wstring tool = SensorsTool();
+    // Removal runs the installed copy in Program Files, which only administrators can change; installing
+    // has to start from our folder, and that copy checks every file it takes (see sensors/Installer.cs).
+    std::wstring tool = SensorsTool();
+    if (!install) {
+        wchar_t programFiles[MAX_PATH] = {};
+        const DWORD n = GetEnvironmentVariableW(L"ProgramW6432", programFiles, MAX_PATH);
+        const std::wstring installed =
+            std::wstring(programFiles, n < MAX_PATH ? n : 0) + L"\\sys-bar\\sensors\\sys-bar-sensors.exe";
+        if (n > 0 && GetFileAttributesW(installed.c_str()) != INVALID_FILE_ATTRIBUTES) tool = installed;
+    }
     if (tool.empty()) return;
     std::thread([tool, install, controller = controller_] {
         const HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);

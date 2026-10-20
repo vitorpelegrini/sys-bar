@@ -1,6 +1,9 @@
 #include "update.h"
 
 #include "json.h"
+#include "signature.h"
+
+#include <objbase.h>
 
 #include <bcrypt.h>
 #include <winhttp.h>
@@ -45,23 +48,29 @@ std::wstring ExecutableDirectory() {
     return slash == std::wstring::npos ? std::wstring() : dir.substr(0, slash);
 }
 
+// Only a per-user installation updates itself: one installed for all users (Program Files) needs an
+// administrator, so for it an update is announced and the release page opened instead.
 bool IsInstalledCopy() {
-    const std::wstring here = ExecutableDirectory();
-    for (HKEY root : {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}) {
-        wchar_t location[MAX_PATH * 2] = {};
-        DWORD size = sizeof(location);
-        if (RegGetValueW(root, kUninstallKey, L"InstallLocation", RRF_RT_REG_SZ, nullptr, location, &size) ==
-                ERROR_SUCCESS &&
-            SameDirectory(location, here)) {
-            return true;
-        }
-    }
-    return false;
+    wchar_t location[MAX_PATH * 2] = {};
+    DWORD size = sizeof(location);
+    return RegGetValueW(HKEY_CURRENT_USER, kUninstallKey, L"InstallLocation", RRF_RT_REG_SZ, nullptr, location,
+                        &size) == ERROR_SUCCESS &&
+           SameDirectory(location, ExecutableDirectory());
 }
 
-// HTTPS GET into memory (`body`) or into a file (`file`), with size and time limits.
+std::wstring NewGuid() {
+    GUID guid{};
+    wchar_t text[64] = {};
+    if (FAILED(CoCreateGuid(&guid)) || !StringFromGUID2(guid, text, static_cast<int>(std::size(text)))) return {};
+    std::wstring out = text;
+    out.erase(std::remove_if(out.begin(), out.end(), [](wchar_t c) { return c == L'{' || c == L'}'; }), out.end());
+    return out;
+}
+
+// HTTPS GET into memory (`body`) or into a file (`file`), with size and time limits. `cancel` (when given)
+// lets another thread abort it at once, even in the middle of a read.
 bool HttpGet(const std::wstring& url, const std::wstring& userAgent, std::string* body, HANDLE file, uint64_t maxBytes,
-             DWORD* statusOut = nullptr) {
+             DWORD* statusOut = nullptr, Cancel* cancel = nullptr) {
     URL_COMPONENTS parts{sizeof(parts)};
     wchar_t host[256] = {};
     wchar_t path[2048] = {};
@@ -88,6 +97,15 @@ bool HttpGet(const std::wstring& url, const std::wstring& userAgent, std::string
         request = WinHttpOpenRequest(connection, L"GET", object.c_str(), nullptr, WINHTTP_NO_REFERER,
                                      WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
     }
+    if (request && cancel) {
+        std::lock_guard lock(cancel->mutex);
+        if (cancel->cancelled) {
+            WinHttpCloseHandle(request);
+            request = nullptr;
+        } else {
+            cancel->request = request;
+        }
+    }
     if (request) {
         // Only HTTPS redirects (GitHub serves assets from a CDN).
         DWORD policy = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
@@ -105,6 +123,10 @@ bool HttpGet(const std::wstring& url, const std::wstring& userAgent, std::string
                 ok = true;
                 std::vector<char> buffer(64 * 1024);
                 for (;;) {
+                    if (cancel && cancel->cancelled) {  // read under no lock: a stale "false" only costs a chunk
+                        ok = false;
+                        break;
+                    }
                     DWORD read = 0;
                     if (!WinHttpReadData(request, buffer.data(), static_cast<DWORD>(buffer.size()), &read)) {
                         ok = false;
@@ -126,7 +148,16 @@ bool HttpGet(const std::wstring& url, const std::wstring& userAgent, std::string
             }
         }
     }
-    if (request) WinHttpCloseHandle(request);
+    if (request) {
+        // The canceller may have closed it already (that is how a pending read gets aborted).
+        bool close = true;
+        if (cancel) {
+            std::lock_guard lock(cancel->mutex);
+            close = cancel->request == request;
+            cancel->request = nullptr;
+        }
+        if (close) WinHttpCloseHandle(request);
+    }
     if (connection) WinHttpCloseHandle(connection);
     if (session) WinHttpCloseHandle(session);
     return ok;
@@ -138,6 +169,14 @@ std::optional<std::string> Sha256OfFile(const std::wstring& path) {
     HANDLE file = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
                               FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     if (file == INVALID_HANDLE_VALUE) return std::nullopt;
+    auto result = Sha256OfHandle(file);
+    CloseHandle(file);
+    return result;
+}
+
+std::optional<std::string> Sha256OfHandle(HANDLE file) {
+    LARGE_INTEGER start{};
+    if (!SetFilePointerEx(file, start, nullptr, FILE_BEGIN)) return std::nullopt;
     BCRYPT_ALG_HANDLE algorithm = nullptr;
     BCRYPT_HASH_HANDLE hash = nullptr;
     std::optional<std::string> result;
@@ -261,7 +300,16 @@ bool SameDirectory(std::wstring_view a, std::wstring_view b) {
 // ---- Updater -----------------------------------------------------------------------------------------
 
 Updater::~Updater() {
-    if (worker_.joinable()) worker_.join();  // bounded by the HTTP timeouts
+    // Exiting during a download: abort it now (closing the request ends a pending read) instead of
+    // keeping the process, its files and its single-instance mutex alive for minutes.
+    {
+        std::lock_guard lock(cancel_.mutex);
+        cancel_.cancelled = true;
+        if (cancel_.request) WinHttpCloseHandle(static_cast<HINTERNET>(cancel_.request));
+        cancel_.request = nullptr;
+    }
+    if (worker_.joinable()) worker_.join();
+    if (installerFile_ != INVALID_HANDLE_VALUE) CloseHandle(installerFile_);
 }
 
 void Updater::Init(HWND notify, UINT message, std::wstring currentVersion, std::wstring releasesApiUrl) {
@@ -282,30 +330,35 @@ void Updater::SetState(State state) {
     if (notify_) PostMessageW(notify_, message_, static_cast<WPARAM>(state), 0);
 }
 
-void Updater::Run(void (Updater::*job)()) {
-    const State s = state_.load();
-    if (s == State::Checking || s == State::Downloading || s == State::Installing) return;  // busy
-    if (worker_.joinable()) worker_.join();
+bool Updater::Run(void (Updater::*job)(), State busy) {
+    // The busy state is taken here, atomically, before the thread exists: a second request (timer and menu
+    // at once) sees it and returns, so the UI thread never joins a worker that is still running.
+    State s = state_.load();
+    do {
+        if (s == State::Checking || s == State::Downloading || s == State::Installing) return false;
+    } while (!state_.compare_exchange_weak(s, busy));
+    if (notify_) PostMessageW(notify_, message_, static_cast<WPARAM>(busy), 0);
+    if (worker_.joinable()) worker_.join();  // finished: it set a final state before ending
     worker_ = std::thread([this, job] { (this->*job)(); });
+    return true;
 }
 
 void Updater::Check() {
     if (state_ == State::Ready) return;  // already downloaded: nothing new to learn
-    Run(&Updater::DoCheck);
+    Run(&Updater::DoCheck, State::Checking);
 }
 
 void Updater::Download() {
     if (state_ != State::Available || !installed_) return;
-    Run(&Updater::DoDownload);
+    Run(&Updater::DoDownload, State::Downloading);
 }
 
 void Updater::DoCheck() {
-    SetState(State::Checking);
     std::string body;
     const std::wstring agent = L"sys-bar/" + current_;
     std::optional<Release> release;
     DWORD status = 0;
-    if (HttpGet(apiUrl_, agent, &body, nullptr, kMaxJsonBytes, &status)) release = ParseLatestRelease(body);
+    if (HttpGet(apiUrl_, agent, &body, nullptr, kMaxJsonBytes, &status, &cancel_)) release = ParseLatestRelease(body);
     if (status == 404) return SetState(State::UpToDate);  // nothing published yet
     const auto current = ParseVersion(current_);
     if (!release || !current) return SetState(State::Failed);
@@ -317,7 +370,6 @@ void Updater::DoCheck() {
 }
 
 void Updater::DoDownload() {
-    SetState(State::Downloading);
     const auto release = latest();
     if (!release || release->setupUrl.empty() || release->setupHashUrl.empty() || !SafeFileName(release->setupName) ||
         !EndsWith(release->setupName, L".exe")) {
@@ -327,30 +379,47 @@ void Updater::DoDownload() {
 
     // 1) Expected digest, published next to the installer.
     std::string hashText;
-    if (!HttpGet(release->setupHashUrl, agent, &hashText, nullptr, 4096)) return SetState(State::Failed);
+    if (!HttpGet(release->setupHashUrl, agent, &hashText, nullptr, 4096, nullptr, &cancel_)) {
+        return SetState(State::Failed);
+    }
     const auto expected = ParseSha256File(hashText, release->setupName);
     if (!expected) return SetState(State::Failed);
 
-    // 2) Installer, into a private folder under %TEMP%.
+    // 2) Installer, into a new folder with a random name under %TEMP% (never a predictable, reused path).
     wchar_t temp[MAX_PATH] = {};
-    GetTempPathW(MAX_PATH, temp);
-    const std::wstring dir = std::wstring(temp) + L"sys-bar-update";
-    CreateDirectoryW(dir.c_str(), nullptr);
+    const DWORD tempLength = GetTempPathW(MAX_PATH, temp);
+    const std::wstring guid = NewGuid();
+    if (tempLength == 0 || tempLength >= MAX_PATH || guid.empty()) return SetState(State::Failed);
+    const std::wstring dir = std::wstring(temp) + L"sys-bar-update-" + guid;
+    if (!CreateDirectoryW(dir.c_str(), nullptr)) return SetState(State::Failed);
     const std::wstring path = dir + L"\\" + release->setupName;
-    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == INVALID_HANDLE_VALUE) return SetState(State::Failed);
-    const bool downloaded = HttpGet(release->setupUrl, agent, nullptr, file, kMaxInstallerBytes);
+    const bool downloaded = HttpGet(release->setupUrl, agent, nullptr, file, kMaxInstallerBytes, nullptr, &cancel_);
     CloseHandle(file);
 
-    // 3) Verify before anything runs it.
-    const auto actual = downloaded ? Sha256OfFile(path) : std::nullopt;
-    if (!actual || *actual != *expected) {
+    // 3) Verify, through a handle that stays open until the installer starts: it lets others read (the
+    // loader) but nobody write, rename or delete, so the file that runs is the file that was checked.
+    HANDLE locked = downloaded ? CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                             FILE_ATTRIBUTE_NORMAL, nullptr)
+                               : INVALID_HANDLE_VALUE;
+    const auto actual = locked != INVALID_HANDLE_VALUE ? Sha256OfHandle(locked) : std::nullopt;
+    bool trusted = actual && *actual == *expected;
+    // Once releases are code-signed, an update must also be signed by the same publisher as this copy.
+    if (trusted) {
+        if (const auto own = signature::OwnSigner()) trusted = signature::TrustedSigner(path) == own;
+    }
+    if (!trusted) {
+        if (locked != INVALID_HANDLE_VALUE) CloseHandle(locked);
         DeleteFileW(path.c_str());
+        RemoveDirectoryW(dir.c_str());
         return SetState(State::Failed);
     }
     {
         std::lock_guard lock(mutex_);
         installerPath_ = path;
+        if (installerFile_ != INVALID_HANDLE_VALUE) CloseHandle(installerFile_);
+        installerFile_ = locked;
     }
     SetState(State::Ready);
 }
@@ -363,8 +432,8 @@ bool Updater::Install() {
         path = installerPath_;
     }
     // The installer closes this instance gracefully (restoring the taskbar), updates the files and
-    // starts the new version again.
-    std::wstring command = L"\"" + path + L"\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-";
+    // starts the new version again. Per-user, like the installation being updated.
+    std::wstring command = L"\"" + path + L"\" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /CURRENTUSER";
     STARTUPINFOW startup{sizeof(startup)};
     PROCESS_INFORMATION process{};
     if (!CreateProcessW(path.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
@@ -374,6 +443,11 @@ bool Updater::Install() {
     }
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);
+    {
+        std::lock_guard lock(mutex_);
+        if (installerFile_ != INVALID_HANDLE_VALUE) CloseHandle(installerFile_);
+        installerFile_ = INVALID_HANDLE_VALUE;
+    }
     state_ = State::Installing;
     return true;
 }

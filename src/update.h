@@ -39,8 +39,16 @@ std::optional<std::string> ParseSha256File(std::string_view text, std::wstring_v
 bool SameDirectory(std::wstring_view a, std::wstring_view b);
 // SHA-256 of a file as lowercase hex (Windows CNG).
 std::optional<std::string> Sha256OfFile(const std::wstring& path);
+std::optional<std::string> Sha256OfHandle(HANDLE file);  // from the start of an open file
 
 // ---- Updater ----------------------------------------------------------------------------------------
+
+// Lets the owner abort a download from another thread (closing the request ends a pending read).
+struct Cancel {
+    std::mutex mutex;
+    void* request = nullptr;  // HINTERNET of the transfer in flight
+    bool cancelled = false;
+};
 
 enum class State {
     Idle,
@@ -70,7 +78,7 @@ public:
     bool installedCopy() const { return installed_; }
 
 private:
-    void Run(void (Updater::*job)());
+    bool Run(void (Updater::*job)(), State busy);
     void DoCheck();
     void DoDownload();
     void SetState(State state);
@@ -84,6 +92,8 @@ private:
     mutable std::mutex mutex_;
     std::optional<Release> latest_;
     std::wstring installerPath_;
+    HANDLE installerFile_ = INVALID_HANDLE_VALUE;  // keeps the verified installer from being changed until it runs
+    Cancel cancel_;
     std::thread worker_;
 };
 

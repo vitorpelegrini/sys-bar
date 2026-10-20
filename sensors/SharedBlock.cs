@@ -78,17 +78,22 @@ namespace SysBar.Sensors
             _mapping = MemoryMappedFile.CreateOrOpen(MappingName, Size, MemoryMappedFileAccess.ReadWrite,
                 MemoryMappedFileOptions.None, security, System.IO.HandleInheritability.None);
             _view = _mapping.CreateViewAccessor(0, Size, MemoryMappedFileAccess.ReadWrite);
-            _view.Write(0, Magic);
-            _view.Write(4, Version);
-            _view.Write(28, SelfUpdate.Encoded(SelfUpdate.Current));  // lets sys-bar spot an outdated service
+            // A block kept alive by a client across a service restart: continue its sequence (never reuse a
+            // value a reader may have seen), starting from an even, consistent state.
+            _sequence = _view.ReadUInt32(8);
+            if ((_sequence & 1) != 0) _sequence++;
             Publish(float.NaN, Array.Empty<Reading>());
         }
 
         /// <summary>Creates the auto-reset event clients set to ask for data (they may only signal it).</summary>
-        public static EventWaitHandle CreateWantedEvent() => CreateClientEvent(WantedEventName);
+        public static EventWaitHandle? CreateWantedEvent() => CreateClientEvent(WantedEventName);
 
-        /// <summary>Auto-reset event that signed-in users may only signal (no data travels through it).</summary>
-        public static EventWaitHandle CreateClientEvent(string name)
+        /// <summary>
+        /// Auto-reset event that signed-in users may only signal (no data travels through it). Any user can
+        /// create a named event, so one that already exists is only used when SYSTEM owns it (a leftover of
+        /// this service); otherwise null is returned and the caller tries again later, never crashing.
+        /// </summary>
+        public static EventWaitHandle? CreateClientEvent(string name)
         {
             var security = new EventWaitHandleSecurity();
             security.AddAccessRule(new EventWaitHandleAccessRule(
@@ -97,14 +102,33 @@ namespace SysBar.Sensors
             security.AddAccessRule(new EventWaitHandleAccessRule(
                 new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
                 EventWaitHandleRights.Modify | EventWaitHandleRights.Synchronize, AccessControlType.Allow));
-            return new EventWaitHandle(false, EventResetMode.AutoReset, name, out _, security);
+            EventWaitHandle? handle = null;
+            try
+            {
+                handle = new EventWaitHandle(false, EventResetMode.AutoReset, name, out bool created, security);
+                if (created || OwnedBySystem(handle.GetAccessControl())) return handle;
+                Log.Write($"refusing {name}: created by another account");
+            }
+            catch (Exception e)
+            {
+                Log.Write($"cannot create {name}: {e.GetType().Name}: {e.Message}");
+            }
+            handle?.Dispose();
+            return null;
         }
+
+        private static bool OwnedBySystem(ObjectSecurity security) =>
+            security.GetOwner(typeof(SecurityIdentifier)) is SecurityIdentifier owner &&
+            (owner.IsWellKnown(WellKnownSidType.LocalSystemSid) || owner.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid));
 
         public void Publish(float cpuTemperature, IReadOnlyList<Reading> readings)
         {
             int count = Math.Min(readings.Count, MaxEntries);
             _view.Write(8, ++_sequence);  // odd: write in progress
             Thread.MemoryBarrier();
+            _view.Write(0, Magic);
+            _view.Write(4, Version);
+            _view.Write(28, SelfUpdate.Encoded(SelfUpdate.Current));  // lets sys-bar spot an outdated service
             _view.Write(12, (uint)count);
             _view.Write(16, DateTime.UtcNow.ToFileTimeUtc());
             _view.Write(24, cpuTemperature);

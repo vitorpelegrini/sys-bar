@@ -15,12 +15,15 @@ int QuitRunningInstance() {
     GetWindowThreadProcessId(controller, &pid);
     HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
     PostMessageW(controller, WM_CLOSE, 0, 0);
-    DWORD result = WAIT_OBJECT_0;
     if (process) {
-        result = WaitForSingleObject(process, 10000);
+        const DWORD result = WaitForSingleObject(process, 10000);
         CloseHandle(process);
+        return result == WAIT_OBJECT_0 ? 0 : 1;
     }
-    return result == WAIT_OBJECT_0 ? 0 : 1;
+    // Cannot wait on the process (e.g. it runs elevated): at least wait for its window to go away, and
+    // never report success while it is still there.
+    for (int i = 0; i < 100 && FindWindowW(kControllerClass, kControllerTitle); ++i) Sleep(100);
+    return FindWindowW(kControllerClass, kControllerTitle) ? 1 : 0;
 }
 
 }  // namespace

@@ -134,11 +134,12 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 #if HasSensors
-; Elevated (UAC) only for this step: copies the service to Program Files, installs PawnIO if needed.
-; Silent updates skip it when the service exists (no UAC prompt): the service then updates itself from
-; the release. Interactive installs refresh it right away.
+; Elevated (UAC) only for this step, and only in an interactive install the user is watching: copies the
+; service to Program Files (every library checked against the manifest built into the executable) and
+; installs PawnIO if needed. Silent updates never ask for elevation: the service updates itself from the
+; release, and a service that is not installed can be enabled later from the sys-bar menu.
 Filename: "{app}\sensors\sys-bar-sensors.exe"; Parameters: "--install"; Verb: "runas"; \
-    Flags: shellexec waituntilterminated runhidden; Tasks: advancedsensors; Check: (not SensorServiceInstalled) or (not WizardSilent)
+    Flags: shellexec waituntilterminated runhidden; Tasks: advancedsensors; Check: not WizardSilent
 #endif
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
@@ -179,10 +180,22 @@ begin
   Result := FindWindowByClassName(ControllerClass) = 0;
 end;
 
+{ Asks the installed copy to exit with "--quit", which waits for the process itself to end (it holds the
+  files and the single-instance lock until then); other copies are closed through their window. }
+function QuitInstalledCopy(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := True;
+  if FileExists(ExpandConstant('{app}\{#AppExe}')) then
+    Result := Exec(ExpandConstant('{app}\{#AppExe}'), '--quit', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and
+              (ResultCode = 0);
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   WasRunning := FindWindowByClassName(ControllerClass) <> 0;
-  if CloseRunningInstance() then
+  if QuitInstalledCopy() and CloseRunningInstance() then
     Result := ''
   else
     Result := 'sys-bar is still running. Please exit it from its right-click menu and try again.';
@@ -205,22 +218,39 @@ end;
 
 function InitializeUninstall(): Boolean;
 begin
+  QuitInstalledCopy();
   CloseRunningInstance();
   Result := True;
+end;
+
+{ The installed service copy, in Program Files: only administrators can change it, so it is the one that is
+  run elevated (never the per-user copy, which any process of the user could have replaced). }
+function InstalledSensorsTool(): String;
+begin
+  Result := ExpandConstant('{commonpf64}\sys-bar\sensors\sys-bar-sensors.exe');
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
   ResultCode: Integer;
+  Autostart: String;
 begin
   { Remove the advanced sensors service (and its Program Files copy) before the files go away. This is
     decided here, at uninstall time: an [UninstallRun] Check is evaluated at install time, before the
     service existed. }
-  if (CurUninstallStep = usUninstall) and SensorServiceInstalled() and
-     FileExists(ExpandConstant('{app}\sensors\sys-bar-sensors.exe')) then
-    ShellExec('runas', ExpandConstant('{app}\sensors\sys-bar-sensors.exe'), '--uninstall', '', SW_HIDE,
-              ewWaitUntilTerminated, ResultCode);
-  { The autostart value may also have been created from the app menu. }
-  if CurUninstallStep = usPostUninstall then
+  if (CurUninstallStep = usUninstall) and SensorServiceInstalled() then
+  begin
+    if not FileExists(InstalledSensorsTool()) or
+       not ShellExec('runas', InstalledSensorsTool(), '--uninstall', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) or
+       (ResultCode <> 0) or SensorServiceInstalled() then
+      if not UninstallSilent() then
+        MsgBox('The sys-bar sensors service could not be removed (administrator rights were not granted).' + #13#10 +
+               'Remove it later with: "' + InstalledSensorsTool() + '" --uninstall (as administrator).',
+               mbInformation, MB_OK);
+  end;
+  { The autostart value may also have been created from the app menu; another copy's is left alone. }
+  if (CurUninstallStep = usPostUninstall) and
+     RegQueryStringValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', 'sys-bar', Autostart) and
+     (CompareText(Autostart, '"' + ExpandConstant('{app}\{#AppExe}') + '"') = 0) then
     RegDeleteValue(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', 'sys-bar');
 end;

@@ -23,8 +23,9 @@ namespace SysBar.Sensors
 
         /// <summary>
         /// Generic "Fan #N" names: the Super I/O reference designs wire the CPU header to a fixed input. Nuvoton
-        /// NCT67xx: FANIN0 = SYSFAN, FANIN1 = CPUFAN ("Fan #2"). ITE IT87xx and Fintek F718xx: FAN1 = CPU_FAN
-        /// ("Fan #1"). With a single fan reported, that fan is the CPU fan. Other inputs are case fans.
+        /// NCT67xx: FANIN0 = SYSFAN, FANIN1 = CPUFAN ("Fan #2"); the NCT668x family (MSI boards) uses input 0
+        /// ("Fan #1"). ITE IT87xx and Fintek F718xx: FAN1 = CPU_FAN ("Fan #1"). With a single fan spinning on
+        /// the chip, that fan is the CPU fan. Other inputs are case fans. A guess: the menu corrects it.
         /// </summary>
         public static Role FromChip(string chip, string name, int fanCount)
         {
@@ -33,7 +34,8 @@ namespace SysBar.Sensors
             int index = int.Parse(m.Groups[1].Value);
             if (fanCount == 1) return Role.Cpu;
             string c = chip.ToUpperInvariant();
-            int cpuIndex = c.Contains("NUVOTON") || c.Contains("NCT") ? 2
+            int cpuIndex = c.Contains("NCT668") ? 1
+                : c.Contains("NUVOTON") || c.Contains("NCT") ? 2
                 : c.Contains("ITE") || c.Contains("IT87") || c.Contains("FINTEK") || c.Contains("F718") ? 1
                 : 0;
             if (cpuIndex == 0) return Role.Unknown;

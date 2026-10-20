@@ -35,4 +35,10 @@
     <Reference Include="System.Runtime.Serialization" />
   </ItemGroup>
 
+  <!-- SHA-256 of the shipped libraries, written by tools/package.ps1 and checked by every elevated step
+       (see Manifest.cs). Development builds have none. -->
+  <ItemGroup Condition="'$(SysBarManifest)' != ''">
+    <EmbeddedResource Include="$(SysBarManifest)" LogicalName="manifest.txt" />
+  </ItemGroup>
+
 </Project>
