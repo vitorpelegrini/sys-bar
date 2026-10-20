@@ -20,16 +20,17 @@ constexpr float kTitleSize = 12.5f;
 constexpr float kValueSize = 18.0f;
 constexpr float kSmallSize = 11.0f;
 
-constexpr float kHeaderToRow = 18.0f;
+constexpr float kHeaderToRow = 12.0f;
 constexpr float kValueToSub = 17.0f;
 constexpr float kSubToSpark = 9.0f;
 constexpr float kSparkHeight = 30.0f;
 constexpr float kSparkRadius = 4.0f;
 constexpr float kMinSparkHeight = 14.0f;  // graphs shrink down to this on short screens
-constexpr float kHalfGap = 14.0f;         // between the two half rows of a line
+constexpr float kRowPad = 10.0f;          // inside each metric's tile
+constexpr float kHalfGap = 8.0f;          // between the two half rows of a line (same as between tiles)
 constexpr float kHalfValueSize = 15.0f;
-constexpr float kRowGap = 17.0f;
-constexpr float kMinRowGap = 10.0f;
+constexpr float kRowGap = 8.0f;  // between metric tiles
+constexpr float kMinRowGap = 5.0f;
 constexpr float kWideWidth = 720.0f;  // short screens only: a wider card instead of a taller one
 constexpr float kFooterGap = 14.0f;
 constexpr float kSepToHint = 13.0f;
@@ -45,9 +46,9 @@ constexpr float kTileRadius = 6.0f;
 constexpr float kTileTitleSize = 11.0f;
 constexpr float kTileValueSize = 13.0f;
 constexpr float kTileDetailSize = 10.5f;
-constexpr float kTileToGauge = 8.0f;  // value baseline -> gauge
-constexpr float kGaugeHeight = 3.0f;
-constexpr float kGaugeToDetail = 7.0f;  // gauge -> detail cap height
+constexpr float kTileToGauge = 8.0f;    // value baseline -> gauge
+constexpr float kGaugeHeight = 12.0f;   // thermometer bulb diameter
+constexpr float kGaugeToDetail = 6.0f;  // thermometer -> detail cap height
 constexpr float kHintLine = 18.0f;      // the faint line under the tiles
 constexpr float kNoticeGap = 12.0f;
 
@@ -87,6 +88,11 @@ float FrameHeight() {
 // Text part of a graph line, above its sparkline.
 float LineTextHeight(bool half, float extra) {
     return (half ? kHalfValueSize : kValueSize) * kCap + kValueToSub + extra + kSubToSpark;
+}
+
+// A whole metric tile: padding, texts and graph.
+float LineHeight(bool half, float extra, float spark) {
+    return kRowPad + LineTextHeight(half, extra) + spark + kRowPad;
 }
 
 D2D1_COLOR_F WithAlpha(D2D1_COLOR_F c, float a) {
@@ -156,15 +162,17 @@ SIZE Card::Measure(UINT dpi, const CardModel& model, int maxHeightPx, int maxWid
                    width(model.window, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
     for (const CardRow& row : model.rows) {
         if (row.half) {  // two per line: each half needs its title and value side by side
-            const float half = kIndent + width(row.title, kTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD) + kMinGap +
-                               width(row.value, kHalfValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+            const float half = 2.0f * kRowPad + kIndent + width(row.title, kTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD) +
+                               kMinGap + width(row.value, kHalfValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD);
             needed = std::max(needed, 2.0f * half + kHalfGap);
             continue;
         }
-        needed = std::max(needed, kIndent + width(row.title, kTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD) + kMinGap +
-                                      width(row.value, kValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD));
-        needed = std::max(needed, kIndent + width(row.subtitle, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL) + kSubToPeak +
-                                      width(row.peak, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL));
+        needed =
+            std::max(needed, 2.0f * kRowPad + kIndent + width(row.title, kTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD) +
+                                 kMinGap + width(row.value, kValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD));
+        needed =
+            std::max(needed, 2.0f * kRowPad + kIndent + width(row.subtitle, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL) +
+                                 kSubToPeak + width(row.peak, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL));
     }
     const float footerLeft = width(model.footerLeft, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
     const float footerRight = width(model.footerRight, kSmallSize,
@@ -207,8 +215,9 @@ SIZE Card::Measure(UINT dpi, const CardModel& model, int maxHeightPx, int maxWid
                 RowBox box;
                 box.row = i + k;
                 box.line = lines_.size();
-                box.x = k == 0 ? 0.0f : halfWidth + kHalfGap;
-                box.w = half ? halfWidth : content;
+                // The box is the tile's inside: the tile adds kRowPad all around.
+                box.x = (k == 0 ? 0.0f : halfWidth + kHalfGap) + kRowPad;
+                box.w = (half ? halfWidth : content) - 2.0f * kRowPad;
                 if (half) {
                     box.subtitle = row.peak.empty()       ? row.subtitle
                                    : row.subtitle.empty() ? row.peak
@@ -230,7 +239,7 @@ SIZE Card::Measure(UINT dpi, const CardModel& model, int maxHeightPx, int maxWid
         float y = 0.0f;
         for (RowLine& line : lines_) {
             line.y = y;
-            y += LineTextHeight(line.half, line.extra) + spark + rowGap;
+            y += LineHeight(line.half, line.extra, spark) + rowGap;
         }
         height += lines_.empty() ? 0.0f : y - rowGap;
         sparkHeight_ = spark;
@@ -462,18 +471,31 @@ void Card::DrawSensorTile(const CardSensorLine& tile, const D2D1_RECT_F& area) {
     DrawText(title.Get(), left + 11.0f, base, medium);
     DrawTextRight(value.Get(), right, base, tile.level > 0 && !theme_.highContrast ? hot : strong);
 
-    // Temperature gauge.
+    // Thermometer: a bulb on the left and a tube that fills up with the temperature, in its color.
     const float gaugeTop = Snap(base + kTileToGauge);
-    const float gh = std::max(kGaugeHeight, 2.0f / scale_);
+    const float gh = kGaugeHeight;  // the bulb's diameter
     if (tile.gauge >= 0.0f) {
-        const float r = gh / 2.0f;
-        brush_->SetColor(Ink(theme_, light ? 0.09f : 0.12f));
-        target_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(left, gaugeTop, right, gaugeTop + gh), r, r),
-                                      brush_.Get());
-        const float fill = std::max((right - left) * std::clamp(tile.gauge, 0.0f, 1.0f), gh);
-        brush_->SetColor(tile.level > 0 ? hot : accent);
-        target_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(left, gaugeTop, left + fill, gaugeTop + gh), r, r),
-                                      brush_.Get());
+        const D2D1_COLOR_F fillColor = tile.level > 0 ? hot : accent;
+        const float bulbR = gh / 2.0f;
+        const float cy = gaugeTop + bulbR;
+        const float wall = std::max(1.5f, 2.0f / scale_);  // glass thickness around the liquid
+        const float glassR = gh * 0.27f;                   // half the tube's outer height
+        const float tubeLeft = left + bulbR;               // the tube starts inside the bulb
+        // Glass: the tube (rounded at the top end) and the bulb, in the track color.
+        brush_->SetColor(Ink(theme_, light ? 0.11f : 0.14f));
+        target_->FillRoundedRectangle(
+            D2D1::RoundedRect(D2D1::RectF(tubeLeft, cy - glassR, right, cy + glassR), glassR, glassR), brush_.Get());
+        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(left + bulbR, cy), bulbR, bulbR), brush_.Get());
+        // Liquid inside the glass: the bulb is always full, the column rises with the temperature.
+        brush_->SetColor(fillColor);
+        const float liquidR = std::max(glassR - wall, 1.0f / scale_);
+        const float top = tubeLeft + (right - wall - tubeLeft) * std::clamp(tile.gauge, 0.0f, 1.0f);
+        target_->FillRoundedRectangle(
+            D2D1::RoundedRect(
+                D2D1::RectF(tubeLeft, cy - liquidR, std::max(top, tubeLeft + 2.0f * liquidR), cy + liquidR), liquidR,
+                liquidR),
+            brush_.Get());
+        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(left + bulbR, cy), bulbR - wall, bulbR - wall), brush_.Get());
     }
 
     // Detail: the fans of this device, or its model.
@@ -544,9 +566,21 @@ bool Card::Paint(const CardModel& model) {
         const bool hot = theme_.colorByLoad && row.load >= kWarnLoad;
         const D2D1_COLOR_F valueColor = hot && !theme_.highContrast ? accent : strong;
         const float lineTop = rowsTop + line.y;
-        const float valueBase = lineTop + valueSize * kCap;
+        const float contentTop = lineTop + kRowPad;
+        const float valueBase = contentTop + valueSize * kCap;
         const float subBase = valueBase + kValueToSub;
-        const float sparkTop = lineTop + LineTextHeight(line.half, line.extra);
+        const float sparkTop = contentTop + LineTextHeight(line.half, line.extra);
+
+        // The tile holding this metric, the same surface as the sensor tiles.
+        const D2D1_RECT_F tile = D2D1::RectF(Snap(x0 - kRowPad), Snap(lineTop), Snap(x1 + kRowPad),
+                                             Snap(lineTop + LineHeight(line.half, line.extra, sparkHeight_)));
+        brush_->SetColor(Ink(theme_, light ? 0.035f : 0.045f));
+        target_->FillRoundedRectangle(D2D1::RoundedRect(tile, kTileRadius, kTileRadius), brush_.Get());
+        if (theme_.highContrast) {
+            brush_->SetColor(FromColorRef(theme_.hcText));
+            target_->DrawRoundedRectangle(D2D1::RoundedRect(tile, kTileRadius, kTileRadius), brush_.Get(),
+                                          1.0f / scale_);
+        }
 
         brush_->SetColor(accent);
         const float dotY = valueBase - kTitleSize * kCap / 2.0f;
@@ -554,10 +588,9 @@ bool Card::Paint(const CardModel& model) {
         DrawText(Text(row.title, kTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD).Get(), x0 + kIndent, valueBase, strong);
         DrawTextRight(Text(row.value, valueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD).Get(), x1, valueBase, valueColor);
 
-        // Subtitle (wrapped, never cut); full rows show the peak on the right of its first line.
-        // Icons in the metric's own color, a little softer than the marker.
-        const D2D1_COLOR_F iconColor =
-            theme_.highContrast ? medium : WithAlpha(MetricColor(row.id, 0.0f, theme_), 0.85f);
+        // Subtitle (wrapped, never cut); full rows show the peak on the right of its first line. Icons stay
+        // neutral and quiet: color is kept for what carries information (marker, value, graph).
+        const D2D1_COLOR_F iconColor = theme_.highContrast ? medium : Ink(theme_, light ? 0.40f : 0.42f);
         auto sub = Wrapped(box.subtitle, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL, box.subWidth);
         DrawText(sub.Get(), x0 + kIndent, subBase, medium, &iconColor);
         if (!line.half) {
@@ -568,7 +601,7 @@ bool Card::Paint(const CardModel& model) {
     }
     if (!lines_.empty()) {
         const RowLine& last = lines_.back();
-        y = rowsTop + last.y + LineTextHeight(last.half, last.extra) + sparkHeight_;
+        y = rowsTop + last.y + LineHeight(last.half, last.extra, sparkHeight_);
     }
 
     // Sensors: a grid of tiles, one per device, with its fans (see CardSensorLine).
