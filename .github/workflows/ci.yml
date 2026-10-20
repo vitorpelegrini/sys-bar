@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  format:
+    name: Format
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: clang-format
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem src, tests -Include *.cpp, *.h -Recurse | ForEach-Object FullName
+          clang-format --version
+          clang-format --dry-run --Werror --style=file $files
+
+  build:
+    name: Build (${{ matrix.arch }})
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            platform: x64
+            tests: ON
+          - arch: arm64
+            platform: ARM64
+            tests: OFF
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >
+          cmake -S . -B build -G "Visual Studio 17 2022" -A ${{ matrix.platform }}
+          -DSYSBAR_WARNINGS_AS_ERRORS=ON -DSYSBAR_BUILD_TESTS=${{ matrix.tests }}
+      - name: Build
+        run: cmake --build build --config Release -- /m /nologo
+      - name: Test
+        if: matrix.tests == 'ON'
+        run: build\Release\sysbar-tests.exe --previews build\previews
+      - name: Upload previews
+        if: matrix.tests == 'ON'
+        uses: actions/upload-artifact@v4
+        with:
+          name: previews
+          path: build/previews
+          retention-days: 7
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: sys-bar-${{ matrix.arch }}
+          path: build/Release/sys-bar.exe
+          retention-days: 7
+
+  analyze:
+    name: Static analysis (MSVC /analyze)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DSYSBAR_BUILD_TESTS=OFF
+          -DSYSBAR_WARNINGS_AS_ERRORS=ON
+          "-DCMAKE_CXX_FLAGS=/analyze /analyze:external- /external:anglebrackets /external:W0 /EHsc"
+      - name: Build
+        run: cmake --build build --config Release --target sysbar_core -- /m /nologo

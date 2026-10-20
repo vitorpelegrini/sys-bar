@@ -1,0 +1,10 @@
+* text=auto eol=lf
+
+# Windows-native files keep CRLF.
+*.ps1 text eol=crlf
+*.iss text eol=crlf
+*.rc  text eol=crlf
+
+# Binary assets.
+*.ico binary
+*.png binary

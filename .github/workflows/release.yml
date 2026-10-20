@@ -1,0 +1,48 @@
+name: Release
+
+# Pushing a tag vX.Y.Z builds, tests and publishes the release:
+#   installer (x64 + ARM64), portable zips and SHA-256 checksums.
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check that the tag matches the project version
+        shell: pwsh
+        run: |
+          $version = & tools/version.ps1
+          if ("v$version" -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} does not match CMakeLists.txt version $version"
+          }
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --no-progress -y
+          }
+
+      - name: Build, test and package
+        shell: pwsh
+        run: tools/package.ps1
+
+      - name: Release notes
+        shell: pwsh
+        run: tools/release-notes.ps1 -Version $env:VERSION -Out dist/RELEASE_NOTES.md
+
+      - name: Publish
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $files = Get-ChildItem dist -File | Where-Object { $_.Name -ne 'RELEASE_NOTES.md' } | ForEach-Object FullName
+          gh release create "${{ github.ref_name }}" $files --title "sys-bar $env:VERSION" --notes-file dist/RELEASE_NOTES.md --verify-tag

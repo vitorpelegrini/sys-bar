@@ -1,0 +1,14 @@
+---
+BasedOnStyle: Google
+IndentWidth: 4
+ColumnLimit: 120
+AccessModifierOffset: -4
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortLoopsOnASingleLine: true
+DerivePointerAlignment: false
+PointerAlignment: Left
+# <windows.h> must come before other Windows headers: never reorder includes.
+SortIncludes: Never
+IncludeBlocks: Preserve

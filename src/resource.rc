@@ -1,0 +1,34 @@
+#include <winver.h>
+
+#include "version.h"
+
+1 ICON "../assets/sys-bar.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION SYSBAR_VERSION_MAJOR, SYSBAR_VERSION_MINOR, SYSBAR_VERSION_PATCH, 0
+PRODUCTVERSION SYSBAR_VERSION_MAJOR, SYSBAR_VERSION_MINOR, SYSBAR_VERSION_PATCH, 0
+FILEFLAGSMASK 0x3fL
+FILEFLAGS 0x0L
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904b0"
+        BEGIN
+            VALUE "CompanyName", "Vitor Pelegrini de Souza"
+            VALUE "FileDescription", "sys-bar - system monitor in the Windows taskbar"
+            VALUE "FileVersion", SYSBAR_VERSION_TEXT
+            VALUE "InternalName", "sys-bar"
+            VALUE "LegalCopyright", "Copyright (c) 2026 Vitor Pelegrini de Souza. MIT License."
+            VALUE "OriginalFilename", "sys-bar.exe"
+            VALUE "ProductName", "sys-bar"
+            VALUE "ProductVersion", SYSBAR_VERSION_TEXT
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

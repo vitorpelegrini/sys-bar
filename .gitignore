@@ -1,0 +1,11 @@
+# Build output
+build/
+build-*/
+out/
+dist/
+
+# IDEs
+.vs/
+.vscode/
+*.user
+*.suo

@@ -1,0 +1,66 @@
+name: Bug report
+description: Something does not work or looks wrong.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem! Please fill in as much as you can.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you see, and what did you expect instead? Screenshots help a lot.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+  - type: input
+    id: version
+    attributes:
+      label: sys-bar version
+      description: Right-click the strip -> "About sys-bar x.y.z".
+      placeholder: 1.0.0
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      description: Run `winver` (e.g. Windows 11 24H2, build 26100).
+    validations:
+      required: true
+  - type: dropdown
+    id: taskbar
+    attributes:
+      label: Taskbar
+      options:
+        - Bottom (default)
+        - Top
+        - Left / right (Windows 10)
+        - Auto-hide
+        - Classic taskbar restored on Windows 11 (ExplorerPatcher, StartAllBack...)
+  - type: input
+    id: setup
+    attributes:
+      label: Display scaling and monitors
+      placeholder: 150%, two monitors, taskbar on the primary one
+  - type: input
+    id: hardware
+    attributes:
+      label: CPU / GPU
+      placeholder: Ryzen 7 5800X, NVIDIA RTX 3070
+  - type: textarea
+    id: log
+    attributes:
+      label: Log (optional)
+      description: |
+        Exit sys-bar, then start it from a terminal with logging enabled and reproduce the problem:
+        `$env:SYSBAR_LOG = "$env:TEMP\sys-bar.log"; & "$env:LOCALAPPDATA\Programs\sys-bar\sys-bar.exe"`
+        and paste the content of `%TEMP%\sys-bar.log`.
+      render: text

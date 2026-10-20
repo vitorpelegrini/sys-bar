@@ -1,0 +1,20 @@
+name: Translation
+description: Fix a translation or request a new language.
+labels: [translation]
+body:
+  - type: input
+    id: language
+    attributes:
+      label: Language
+      placeholder: Dutch (nl)
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: What should change?
+      description: |
+        Quote the current text and your suggestion. All strings live in `src/i18n.cpp`;
+        pull requests are very welcome (see CONTRIBUTING.md -> Translations).
+    validations:
+      required: true
