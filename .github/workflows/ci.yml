@@ -18,7 +18,7 @@ jobs:
     name: Format
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: clang-format
         shell: pwsh
         run: |
@@ -40,7 +40,7 @@ jobs:
             platform: ARM64
             tests: OFF
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Configure
         run: >
           cmake -S . -B build -G "Visual Studio 17 2022" -A ${{ matrix.platform }}
@@ -55,13 +55,13 @@ jobs:
         run: build\Release\sysbar-tests.exe --previews build\previews
       - name: Upload previews
         if: matrix.tests == 'ON'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: previews
           path: build/previews
           retention-days: 7
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sys-bar-${{ matrix.arch }}
           path: build/Release/sys-bar.exe
@@ -71,7 +71,7 @@ jobs:
     name: Static analysis (MSVC /analyze)
     runs-on: windows-2022
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Configure
         run: >
           cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DSYSBAR_BUILD_TESTS=OFF
