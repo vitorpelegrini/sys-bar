@@ -9,6 +9,7 @@ namespace {
 
 constexpr wchar_t kMappingName[] = L"Global\\SysBarSensors";
 constexpr wchar_t kWantedEventName[] = L"Global\\SysBarSensorsWanted";
+constexpr wchar_t kUpdateEventName[] = L"Global\\SysBarSensorsUpdate";
 constexpr wchar_t kServiceName[] = L"SysBarSensors";
 constexpr ULONGLONG kReopenMs = 10'000;  // the service is looked for again every 10 s
 
@@ -31,6 +32,7 @@ bool Decode(const uint8_t* block, size_t size, int64_t nowFileTime, Decoded& out
     const int64_t updated = Get<int64_t>(block, 16);
     if (updated <= 0 || nowFileTime - updated > kMaxAge100ns || updated - nowFileTime > kMaxAge100ns) return false;
 
+    out.serviceVersion = Get<uint32_t>(block, 28);
     const float cpu = Get<float>(block, 24);
     if (std::isfinite(cpu) && cpu > 0.0f && cpu < 150.0f) out.cpuTemperature = cpu;
 
@@ -76,9 +78,16 @@ void SensorFeed::Close() {
     if (view_) UnmapViewOfFile(view_);
     if (mapping_) CloseHandle(mapping_);
     if (wanted_) CloseHandle(wanted_);
+    if (update_) CloseHandle(update_);
     view_ = nullptr;
     mapping_ = nullptr;
     wanted_ = nullptr;
+    update_ = nullptr;
+}
+
+void SensorFeed::RequestUpdate() {
+    if (!update_) update_ = OpenEventW(EVENT_MODIFY_STATE, FALSE, kUpdateEventName);
+    if (update_) SetEvent(update_);
 }
 
 bool SensorFeed::Read(Decoded& out) {

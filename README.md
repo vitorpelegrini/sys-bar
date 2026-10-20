@@ -125,6 +125,9 @@ Once a day sys-bar checks GitHub Releases. When there is a new version:
   moment. The strip disappears for a second and comes back updated.
 - A portable copy shows a notice with a download link.
 
+The advanced sensors service follows by itself. It downloads its own verified package from the same release,
+with no UAC prompt.
+
 You can check manually or turn this off under **Updates** in the menu.
 
 **Multiple monitors?**

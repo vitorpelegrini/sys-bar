@@ -37,7 +37,8 @@ First public release.
 - Optional advanced sensors (x64): CPU temperature, motherboard/controller fans and SATA drive temperatures
   through a small LocalSystem service built on LibreHardwareMonitorLib and the PawnIO driver. It is enabled
   from the installer or the menu (one UAC prompt), runs from Program Files, publishes through read-only shared
-  memory and only samples while sys-bar is showing data.
+  memory and only samples while sys-bar is showing data. It keeps itself up to date without UAC prompts:
+  when sys-bar has updated, the service downloads its own package from the release, verifies it and restarts.
 - Automatic updates: a daily check of GitHub Releases; installed copies download the new installer,
   verify its SHA-256 and install it silently, while portable copies show a notice. The version and an
   "Updates" submenu (check now, install automatically) are in the context menu.

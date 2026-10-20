@@ -2,6 +2,7 @@
 
 #include "format.h"
 #include "sensorfeed.h"
+#include "version.h"
 
 #include <dxgi.h>
 #include <pdhmsg.h>
@@ -13,12 +14,12 @@
 
 namespace {
 
-constexpr DWORD kFirstSampleDelayMs = 400;     // rate counters need two samples
-constexpr ULONGLONG kAdapterRetryMs = 30'000;  // when no GPU is found, look again every 30 s
-constexpr int kAdapterMissLimit = 3;
-constexpr ULONGLONG kDiskTemperatureMs =
-    5'000;  // temperatures change slowly           // samples without our LUID before re-enumerating
-constexpr UINT kMicrosoftVendor = 0x1414;  // "Microsoft Basic Render Driver"
+constexpr DWORD kFirstSampleDelayMs = 400;                   // rate counters need two samples
+constexpr ULONGLONG kAdapterRetryMs = 30'000;                // when no GPU is found, look again every 30 s
+constexpr int kAdapterMissLimit = 3;                         // samples without our LUID before re-enumerating
+constexpr ULONGLONG kDiskTemperatureMs = 5'000;              // drive temperatures change slowly
+constexpr ULONGLONG kServiceUpdateRetryMs = 30 * 60 * 1000;  // ask an outdated sensors service every 30 min
+constexpr UINT kMicrosoftVendor = 0x1414;                    // "Microsoft Basic Render Driver"
 constexpr UINT kBasicRenderDevice = 0x8c;
 
 bool IsValidStatus(DWORD status) {
@@ -490,6 +491,15 @@ void MetricsSampler::CollectSensors(MetricsSnapshot& out) {
     std::vector<SensorReading> fans, extraDrives;
     if (feed_ && feed_->Read(advanced)) {
         out.advancedSensors = true;
+        // sys-bar updates itself without admin rights; the service (in Program Files) catches up on its own
+        // when asked. Version 0 = a service from before the version field: nothing to compare.
+        constexpr uint32_t kAppVersion =
+            feed::EncodeVersion(SYSBAR_VERSION_MAJOR, SYSBAR_VERSION_MINOR, SYSBAR_VERSION_PATCH);
+        const ULONGLONG now = GetTickCount64();
+        if (advanced.serviceVersion != 0 && advanced.serviceVersion < kAppVersion && now >= nextServiceUpdate_) {
+            feed_->RequestUpdate();
+            nextServiceUpdate_ = now + kServiceUpdateRetryMs;
+        }
         out.cpuTemperature = advanced.cpuTemperature;
         for (SensorReading& r : advanced.readings) {
             if (r.group == SensorGroup::Cpu) continue;  // already in cpuTemperature

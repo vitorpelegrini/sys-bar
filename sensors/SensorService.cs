@@ -15,6 +15,7 @@ namespace SysBar.Sensors
         private static readonly TimeSpan ActiveWindow = TimeSpan.FromSeconds(10);
         private static readonly TimeSpan ReleaseAfter = TimeSpan.FromMinutes(5);
         private static readonly TimeSpan MinInterval = TimeSpan.FromMilliseconds(750);
+        private static readonly TimeSpan UpdateCooldown = TimeSpan.FromMinutes(10);  // at most one GitHub check per 10 min
 
         private readonly ManualResetEvent _stop = new ManualResetEvent(false);
         private Thread? _worker;
@@ -63,22 +64,42 @@ namespace SysBar.Sensors
         private void Run()
         {
             Log.Write($"service started (pid {Process.GetCurrentProcess().Id})");
+            if (!Log.ToConsole) SelfUpdate.CleanupStaging();  // leftovers of a finished update
             SharedBlock? block = null;
             EventWaitHandle? wanted = null;
+            EventWaitHandle? updateRequest = null;
+            DateTime lastUpdateCheck = DateTime.MinValue;
+            int updating = 0;
             SensorReader? reader = null;
             try
             {
                 block = new SharedBlock();
                 wanted = SharedBlock.CreateWantedEvent();
+                updateRequest = SharedBlock.CreateClientEvent(SelfUpdate.UpdateEventName);
                 DateTime lastWanted = Log.ToConsole ? DateTime.UtcNow : DateTime.MinValue;
                 DateTime lastRead = DateTime.MinValue;
-                var handles = new WaitHandle[] { _stop, wanted };
+                var handles = new WaitHandle[] { _stop, wanted, updateRequest };
 
                 while (true)
                 {
                     int signaled = WaitHandle.WaitAny(handles, TimeSpan.FromSeconds(1));
                     if (signaled == 0) break;
                     DateTime now = DateTime.UtcNow;
+                    if (signaled == 2)
+                    {
+                        // sys-bar found this service older than itself: look for an update (rate-limited).
+                        if (now - lastUpdateCheck >= UpdateCooldown && Interlocked.CompareExchange(ref updating, 1, 0) == 0)
+                        {
+                            lastUpdateCheck = now;
+                            ThreadPool.QueueUserWorkItem(_ =>
+                            {
+                                try { SelfUpdate.CheckAndUpdate(); }
+                                catch (Exception e) { Log.Write($"update failed: {e.GetType().Name}: {e.Message}"); }
+                                finally { Interlocked.Exchange(ref updating, 0); }
+                            });
+                        }
+                        continue;
+                    }
                     if (signaled == 1 || Log.ToConsole) lastWanted = now;
 
                     if (now - lastWanted < ActiveWindow)
@@ -123,6 +144,7 @@ namespace SysBar.Sensors
             {
                 reader?.Dispose();
                 wanted?.Dispose();
+                updateRequest?.Dispose();
                 block?.Dispose();
                 Log.Write("service stopped");
             }

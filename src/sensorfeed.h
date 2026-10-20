@@ -23,6 +23,7 @@ constexpr size_t kBlockSize = kHeaderSize + kMaxEntries * kEntrySize;
 constexpr int64_t kMaxAge100ns = 15LL * 10'000'000;  // readings older than 15 s are stale
 
 struct Decoded {
+    uint32_t serviceVersion = 0;  // major << 20 | minor << 10 | patch (0 = unknown, older service)
     std::optional<double> cpuTemperature;
     std::vector<SensorReading> readings;
 };
@@ -41,6 +42,8 @@ public:
     // Asks the service for data and returns the latest readings; false when the service is absent,
     // stopped or not publishing.
     bool Read(Decoded& out);
+    // Asks the service to update itself from the official release (it receives no data from us).
+    void RequestUpdate();
     void Close();
 
 private:
@@ -49,8 +52,13 @@ private:
     HANDLE mapping_ = nullptr;
     const uint8_t* view_ = nullptr;
     HANDLE wanted_ = nullptr;
+    HANDLE update_ = nullptr;
     ULONGLONG nextOpen_ = 0;
 };
+
+constexpr uint32_t EncodeVersion(uint32_t major, uint32_t minor, uint32_t patch) {
+    return (major << 20) | (minor << 10) | patch;
+}
 
 // Whether the service is registered (any user may query this).
 bool ServiceInstalled();

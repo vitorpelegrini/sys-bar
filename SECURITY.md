@@ -35,6 +35,13 @@ You should get an answer within a few days.
   - Readings are published in a shared-memory block that users can read but not write. Clients can only
     signal an event ("someone is looking"). The service writes nothing else outside its own folder.
   - It has no network access and no input from other processes except that event.
+  - **The service updates itself without UAC.** When sys-bar sees the service is older than itself, it signals
+    an event. No data is sent, and users can only signal it.
+    - The service then downloads `sys-bar-x.y.z-sensors-x64.zip` from the latest stable GitHub release.
+    - It checks the SHA-256 and the version, plus the publisher once releases are code-signed.
+    - It extracts only flat `.exe`/`.dll`/`.config` files into an administrators-only staging folder, then
+      swaps them in and restarts.
+    - No local process can hand files to the service. It checks GitHub at most once every 10 minutes.
   - Disabling the sensors from the menu, or uninstalling sys-bar, removes the service and its files.
     PawnIO stays installed because other tools share it.
 - Release binaries are built from tagged sources by GitHub Actions; every artifact is published with

@@ -57,6 +57,9 @@ foreach ($arch in $Architectures) {
         New-Item -ItemType Directory -Force $sensors | Out-Null
         Get-ChildItem sensors/bin/Release -File | Where-Object { $_.Extension -in '.exe', '.dll', '.config' } |
             Copy-Item -Destination $sensors
+        # Self-update package for the service (flat: exe/dll/config only, no PawnIO installer).
+        $sensorsZip = Join-Path $dist "sys-bar-$version-sensors-x64.zip"
+        Compress-Archive -Path (Get-ChildItem $sensors -File).FullName -DestinationPath $sensorsZip -Force
         Copy-Item (Get-PawnIOSetup) $sensors
     }
     Copy-Item LICENSE, THIRD-PARTY-NOTICES.md, README.md, CHANGELOG.md $stage

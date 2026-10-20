@@ -129,3 +129,15 @@ TEST(Feed_absent_service_is_harmless) {
     std::printf("      advanced sensors service: %s (installed: %s)\n", fresh ? "publishing" : "not publishing",
                 feed::ServiceInstalled() ? "yes" : "no");
 }
+
+TEST(Feed_reads_the_service_version) {
+    Block b;
+    b.Put<uint32_t>(28, feed::EncodeVersion(1, 2, 3));
+    feed::Decoded d;
+    CHECK(b.Decode(d));
+    CHECK_EQ(d.serviceVersion, feed::EncodeVersion(1, 2, 3));
+    // Ordering works numerically across fields, so "older than the app" is a plain comparison.
+    CHECK(feed::EncodeVersion(1, 9, 9) < feed::EncodeVersion(1, 10, 0));
+    CHECK(feed::EncodeVersion(1, 10, 0) < feed::EncodeVersion(2, 0, 0));
+    CHECK(feed::EncodeVersion(1, 0, 1) > feed::EncodeVersion(1, 0, 0));
+}

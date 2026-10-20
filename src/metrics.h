@@ -159,6 +159,7 @@ private:
     hw::GpuSensors gpuSensors_;
     hw::StorageDevices storage_;
     std::unique_ptr<feed::SensorFeed> feed_;                  // advanced sensors service (optional)
+    ULONGLONG nextServiceUpdate_ = 0;                         // next time an outdated service may be asked
     std::unordered_map<int, ULONGLONG> lastTemperatureRead_;  // disk number -> tick
     std::wstring diskInstanceKey_;  // set of PDH disk instances; a change triggers re-enumeration
     std::unordered_map<std::wstring_view, double> engines_;

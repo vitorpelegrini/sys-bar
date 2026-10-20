@@ -135,9 +135,10 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 [Run]
 #if HasSensors
 ; Elevated (UAC) only for this step: copies the service to Program Files, installs PawnIO if needed.
-; Skipped when the service already exists, so silent updates never show a UAC prompt.
+; Silent updates skip it when the service exists (no UAC prompt): the service then updates itself from
+; the release. Interactive installs refresh it right away.
 Filename: "{app}\sensors\sys-bar-sensors.exe"; Parameters: "--install"; Verb: "runas"; \
-    Flags: shellexec waituntilterminated runhidden; Tasks: advancedsensors; Check: not SensorServiceInstalled
+    Flags: shellexec waituntilterminated runhidden; Tasks: advancedsensors; Check: (not SensorServiceInstalled) or (not WizardSilent)
 #endif
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 

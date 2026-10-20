@@ -113,6 +113,7 @@ namespace SysBar.Sensors
                         Thread.Sleep(500);
                     }
                 }
+                SelfUpdate.CleanupStaging();
                 string parent = Path.GetDirectoryName(Target)!;
                 if (Directory.Exists(parent) && !Directory.EnumerateFileSystemEntries(parent).Any()) Directory.Delete(parent);
                 // PawnIO is a shared driver (FanControl, LibreHardwareMonitor...): it is left installed.

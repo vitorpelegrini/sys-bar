@@ -127,6 +127,9 @@ Uma vez por dia o sys-bar consulta as Releases do GitHub. Quando há versão nov
   tranquilo: a faixa some por um segundo e volta atualizada.
 - A versão portátil mostra um aviso com o link para baixar.
 
+O serviço de sensores avançados acompanha sozinho. Ele baixa o próprio pacote, verificado, da mesma release,
+sem pedir UAC.
+
 Dá para procurar manualmente ou desligar isso em **Atualizações**, no menu.
 
 **Vários monitores?**

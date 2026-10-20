@@ -35,7 +35,7 @@ namespace SysBar.Sensors
     /// <code>
     ///  0 uint32 magic 'SBS1'     4 uint32 version (1)    8 uint32 sequence (odd while writing)
     /// 12 uint32 count           16 int64 updated (FILETIME, UTC)
-    /// 24 float  cpuTemperature (NaN = unknown)           28 uint32 reserved
+    /// 24 float  cpuTemperature (NaN = unknown)           28 uint32 service version (major&lt;&lt;20|minor&lt;&lt;10|patch)
     /// 32 entries[64] x 128 bytes: kind u8, group u8, reserved u16, value f32, name wchar[60]
     /// </code>
     /// Clients ask for fresh data by setting the "wanted" event; when nobody asks, the service idles.
@@ -75,11 +75,15 @@ namespace SysBar.Sensors
             _view = _mapping.CreateViewAccessor(0, Size, MemoryMappedFileAccess.ReadWrite);
             _view.Write(0, Magic);
             _view.Write(4, Version);
+            _view.Write(28, SelfUpdate.Encoded(SelfUpdate.Current));  // lets sys-bar spot an outdated service
             Publish(float.NaN, Array.Empty<Reading>());
         }
 
         /// <summary>Creates the auto-reset event clients set to ask for data (they may only signal it).</summary>
-        public static EventWaitHandle CreateWantedEvent()
+        public static EventWaitHandle CreateWantedEvent() => CreateClientEvent(WantedEventName);
+
+        /// <summary>Auto-reset event that signed-in users may only signal (no data travels through it).</summary>
+        public static EventWaitHandle CreateClientEvent(string name)
         {
             var security = new EventWaitHandleSecurity();
             security.AddAccessRule(new EventWaitHandleAccessRule(
@@ -88,7 +92,7 @@ namespace SysBar.Sensors
             security.AddAccessRule(new EventWaitHandleAccessRule(
                 new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
                 EventWaitHandleRights.Modify | EventWaitHandleRights.Synchronize, AccessControlType.Allow));
-            return new EventWaitHandle(false, EventResetMode.AutoReset, WantedEventName, out _, security);
+            return new EventWaitHandle(false, EventResetMode.AutoReset, name, out _, security);
         }
 
         public void Publish(float cpuTemperature, IReadOnlyList<Reading> readings)
