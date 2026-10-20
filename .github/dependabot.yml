@@ -1,7 +1,23 @@
 version: 2
 updates:
+  # GitHub Actions used by the workflows: one grouped pull request a month.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: monthly
-    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+
+  # The sensors service's NuGet packages (LibreHardwareMonitorLib brings support for new hardware).
+  - package-ecosystem: nuget
+    directory: "/sensors"
+    schedule:
+      interval: monthly
+    groups:
+      sensors:
+        patterns: ["*"]
+    commit-message:
+      prefix: "build"
