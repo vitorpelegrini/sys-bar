@@ -501,23 +501,33 @@ TEST(Card_never_cuts_text_it_widens_then_wraps) {
 
 TEST(Card_shows_a_laptop_battery) {
     using i18n::Str;
-    CardModel model = DemoCard(i18n::Lang::Portuguese);
-    CardRow battery;
-    battery.id = MetricId::Battery;
-    battery.title = i18n::Get(i18n::Lang::Portuguese, Str::CardBattery);
-    battery.value = L"18%";
-    battery.subtitle =
-        std::wstring(i18n::Get(i18n::Lang::Portuguese, Str::CardBatteryOnBattery)) + L" · " + text::Watts(-9.2, L',') +
-        L" · " + text::Format(i18n::Get(i18n::Lang::Portuguese, Str::CardBatteryLeft), {text::HoursMinutes(3000)});
-    battery.load = kWarnLoad;
-    battery.neutral = true;
-    for (int i = 0; i < 60; ++i) battery.history.push_back(0.48f - 0.005f * static_cast<float>(i));
-    model.rows.push_back(battery);
-    Card card(SharedGfx());
-    card.SetTheme(MakeTheme(false));
-    card.Measure(96, model);
-    CHECK(card.Paint(model));
-    SavePreview(card.surface(), L"card-battery", 0x2B2F36);
+    for (const auto lang : {i18n::Lang::Portuguese, i18n::Lang::English}) {
+        CardModel model = DemoCard(lang);
+        model.rows.resize(3);  // CPU, memory, GPU: a laptop without dedicated video memory
+        model.rows.back().subtitle = text::Chip(icon::kDisplay, L"NVIDIA GeForce RTX 4060 Laptop GPU");
+        model.rows[0].subtitle =
+            text::JoinChips({text::Chip(icon::kChip, L"Intel Core i7-13700H"),
+                             text::Chip(icon::kThreads, text::Format(i18n::Get(lang, Str::CardThreads), {L"20"}))});
+        CardRow battery;
+        battery.id = MetricId::Battery;
+        battery.title = i18n::Get(lang, Str::CardBattery);
+        battery.value = L"18%";
+        battery.subtitle = text::JoinChips({text::Chip(icon::kBattery, i18n::Get(lang, Str::CardBatteryOnBattery)),
+                                            text::Chip(icon::kPower, text::Watts(-9.2, L',')),
+                                            text::Chip(icon::kClock, text::Format(i18n::Get(lang, Str::CardBatteryLeft),
+                                                                                  {text::HoursMinutes(3000)}))});
+        battery.load = kWarnLoad;
+        battery.neutral = true;
+        for (int i = 0; i < 60; ++i) battery.history.push_back(0.48f - 0.005f * static_cast<float>(i));
+        model.rows.push_back(battery);
+        model.sensors.resize(2);
+        model.fans.clear();
+        Card card(SharedGfx());
+        card.SetTheme(MakeTheme(false));
+        card.Measure(144, model);
+        CHECK(card.Paint(model));
+        SavePreview(card.surface(), lang == i18n::Lang::English ? L"card-battery-en" : L"card-battery", 0x2B2F36);
+    }
 }
 
 TEST(Card_fits_short_screens_with_many_disks) {

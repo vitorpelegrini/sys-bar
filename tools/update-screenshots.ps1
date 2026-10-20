@@ -4,10 +4,13 @@ $root = Split-Path -Parent $PSScriptRoot
 $previews = Join-Path $root 'build\previews'
 $images = Join-Path $root 'docs\images'
 $map = @{
-    'bar-dark-200.png'   = 'strip-dark.png'
-    'bar-light-100.png'  = 'strip-light.png'
-    'card-dark-150.png'  = 'card-dark.png'
-    'card-light-150.png' = 'card-light.png'
+    'bar-dark-200.png'                = 'strip-dark.png'
+    'bar-light-100.png'               = 'strip-light.png'
+    'card-dark-150.png'               = 'card-dark.png'
+    'card-light-150.png'              = 'card-light.png'
+    'bar-net-battery-150.png'         = 'strip-network-battery.png'
+    'bar-disks-fahrenheit-150.png'    = 'strip-disks-fahrenheit.png'
+    'card-battery-en.png'             = 'card-laptop.png'
 }
 foreach ($source in $map.Keys) {
     $path = Join-Path $previews $source

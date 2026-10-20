@@ -24,22 +24,23 @@ pwsh tools/package.ps1      # zips + installer in dist/, exactly like the releas
 
 | Path | Responsibility |
 | --- | --- |
-| `src/app.*` | Taskbar integration, window procedures, theme, animation, menu |
-| `src/logic.*` | Pure geometry and visibility decisions (unit-tested) |
-| `src/metrics.*` | Sampling thread: PDH (English counter names) + DXGI |
+| `src/app.*` | Taskbar integration (one strip per taskbar), window procedures, theme, animation, card, menu |
+| `src/logic.*` | Pure geometry, visibility, fan-role and threshold decisions (unit-tested) |
+| `src/metrics.*` | Sampling thread: PDH (English counter names), DXGI, disks, network, battery |
+| `src/hardware.*` | Native sensors: GPU (D3DKMT), drives (storage IOCTLs), network (IP Helper), battery |
 | `src/renderer.*` | Layout and drawing of the strip (Direct2D/DirectWrite) |
-| `src/card.*` | Hover card with history graphs |
-| `src/gfx.*` | Shared graphics: factories, layered bitmaps, palette |
+| `src/card.*` | Hover card: metric tiles, graphs, thermometers, fan lines |
+| `src/gfx.*`, `src/icons.h` | Shared graphics: factories, layered bitmaps, palette, inline icon glyphs |
+| `src/trayprobe.*` | Windows 11 clock position through UI Automation (off the UI thread) |
 | `src/i18n.*` | User-interface strings in every language |
 | `src/format.*` | Pure text formatting |
 | `src/settings.*` | `settings.ini` and "Start with Windows" |
-| `tests/` | Test suite (tiny built-in framework, no dependencies) |
-| `src/hardware.*` | Native GPU (D3DKMT) and drive temperature sensors |
 | `src/sensorfeed.*` | Reader of the advanced sensors service (shared memory) |
-| `src/update.*`, `src/json.*` | Self-update through GitHub Releases |
+| `src/update.*`, `src/json.*`, `src/signature.*` | Self-update through GitHub Releases, Authenticode checks |
 | `sensors/` | Advanced sensors service (C#, .NET Framework 4.7.2, LibreHardwareMonitorLib + PawnIO) |
+| `tests/` | Test suite (tiny built-in framework, no dependencies), render previews, stand-in taskbars |
 | `packaging/` | Inno Setup installer |
-| `tools/` | Build, packaging, icon and soak-test scripts |
+| `tools/` | Packaging, screenshots, banner, integration and soak-test scripts |
 
 ## Ground rules for code
 
@@ -63,18 +64,38 @@ pwsh tools/package.ps1      # zips + installer in dist/, exactly like the releas
 (light/dark themes, 100–200% scaling, compact and vertical taskbars, every language) into
 `build/previews`; please look at them, and attach them to pull requests that change visuals.
 
-For changes to the taskbar integration, also run the app and the soak test:
+For changes to the taskbar integration, also run the multi-monitor integration test and the soak test:
 
 ```powershell
+pwsh tools/test-taskbars.ps1                     # the real app against stand-in taskbars (classic and Windows 11)
 pwsh tools/soak.ps1 -Minutes 3 -HoverCycles 20   # CPU, memory, handles and GDI objects over time
+```
+
+`test-taskbars.ps1` runs `sysbar-tests --fake-taskbar classic|modern`, which builds windows with the same
+classes as Explorer's taskbars on other monitors, off screen, and checks embedding, Explorer resetting the
+task list, unplugging and plugging a monitor back, and the Windows 11 placement.
+
+Useful environment variables while testing: `SYSBAR_CONFIG_DIR` (a separate `settings.ini`), `SYSBAR_LOG` (a
+log file), `SYSBAR_FAKE_BATTERY=percent,ac,charging[,watts[,secondsLeft]]` (a simulated laptop battery) and
+`SYSBAR_FORCE_MODERN=1` (the Windows 11 path on Windows 10, for stand-in taskbars).
+
+When a change is visible, refresh the README images:
+
+```powershell
+pwsh tools/update-screenshots.ps1   # strip and card images from build/previews
+pwsh tools/update-banner.ps1        # the banner, with the real card over assets/banner-base.png
 ```
 
 ## Advanced sensors service
 
-`sensors/` is a small Windows service. It reads CPU temperature, fans and SATA temperatures with
-LibreHardwareMonitorLib and publishes them through a read-only shared-memory block whose layout is
-documented in `sensors/SharedBlock.cs` and `src/sensorfeed.h`. The two must change together; the
-version field protects older clients.
+`sensors/` is a small Windows service. It reads CPU temperature, fans (speed, role and PWM duty) and SATA
+temperatures with LibreHardwareMonitorLib and publishes them through a read-only shared-memory block whose
+layout is documented in `sensors/SharedBlock.cs` and `src/sensorfeed.h`. The two must change together; the
+version field protects older clients, and new per-entry fields use bytes that older services wrote as 0.
+
+Its elevated steps must never trust the per-user folder they start from: `tools/package.ps1` embeds a
+SHA-256 manifest of the shipped libraries in the executable (`sensors/Manifest.cs`), and the PawnIO hash is
+pinned both in `tools/package.ps1` and `sensors/Installer.cs` (packaging fails if they differ).
 
 ```powershell
 dotnet build sensors/SysBar.Sensors.csproj -c Release
@@ -104,5 +125,6 @@ sys-bar follows [Semantic Versioning](https://semver.org/). The version lives on
    update the links at the bottom.
 3. Commit (`chore: release x.y.z`), tag `vx.y.z` and push the tag.
 
-The [release workflow](.github/workflows/release.yml) then builds, tests and publishes the
-installer, the portable zips and their SHA-256 checksums, using the changelog section as notes.
+The [release workflow](.github/workflows/release.yml) then builds and tests with a read-only token, and a
+separate job publishes the installer, the portable zips, the sensors update package and their SHA-256
+checksums, using the changelog section as notes.
