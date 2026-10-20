@@ -40,6 +40,7 @@ bool Decode(const uint8_t* block, size_t size, int64_t nowFileTime, Decoded& out
         const uint8_t* e = block + kHeaderSize + static_cast<size_t>(i) * kEntrySize;
         const uint8_t kind = e[0];
         const uint8_t group = e[1];
+        const uint8_t role = e[2];
         const float value = Get<float>(e, 4);
         if (kind > 1 || group > 3 || !std::isfinite(value)) continue;
         const bool fan = kind == 1;
@@ -57,6 +58,8 @@ bool Decode(const uint8_t* block, size_t size, int64_t nowFileTime, Decoded& out
         reading.group = static_cast<SensorGroup>(group);
         reading.name = std::move(name);
         reading.value = value;
+        reading.role =
+            fan && role <= static_cast<uint8_t>(FanRole::Psu) ? static_cast<FanRole>(role) : FanRole::Unknown;
         out.readings.push_back(std::move(reading));
     }
     return true;

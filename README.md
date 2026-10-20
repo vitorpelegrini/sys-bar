@@ -36,7 +36,8 @@
   Windows region, or chosen in the menu.
   - GPU temperature and fan, and NVMe temperatures, need no driver.
   - The optional **advanced sensors** add CPU temperature, motherboard and controller fans, and SATA drive
-    temperatures (see below).
+    temperatures (see below). Each fan is matched to what it cools (CPU, GPU, case, pump, power supply), and a
+    GPU fan resting in zero-RPM mode shows as stopped.
 - **Updates itself.** A daily check of GitHub Releases. Updates are verified by SHA-256 and installed silently.
 - **Hover card.** Shows the hardware model, peaks and a one-minute graph per metric. History above
   80% / 92% load turns amber / red.

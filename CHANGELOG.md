@@ -23,6 +23,10 @@ First public release.
   column. More than four drives are always combined.
 - Temperatures in Celsius or Fahrenheit: automatic from the Windows region (Fahrenheit in the U.S.), or
   chosen in the menu.
+- The card's "Sensors" section is a grid of tiles, one per device, each with a temperature gauge and the fans
+  that cool it. Fans are matched to the CPU, GPU, case, pump or power supply from the board's labels or, on
+  boards with generic "Fan #N" names, from the Super I/O reference wiring; a GPU fan in zero-RPM mode shows
+  as stopped.
 - Temperatures without drivers or administrator rights: GPU temperature and fan speed (WDDM 2.7+), NVMe/SSD
   temperatures; shown as badges in the strip and in a "Sensors" section of the card. Disk temperatures are
   only read while a drive is busy, so sleeping hard drives are never woken up.

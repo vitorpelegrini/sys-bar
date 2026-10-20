@@ -152,10 +152,13 @@ CardModel DemoCard(i18n::Lang lang) {
     row(MetricId::Disk, S(Str::CardDisk), pct(L"7"),
         text::Format(S(Str::CardDiskIo), {L"12,4 " + mbps, L"0,8 " + mbps}), pct(L"64"), 0.05f, 0.08f, 0.6f);
     model.sensorsTitle = S(Str::CardSensors);
+    const auto rpm = [&](const wchar_t* v) { return text::Format(S(Str::CardRpm), {v}); };
     model.sensors = {
-        {L"CPU", L"47 °C", 0, MetricId::Cpu},
-        {L"AMD Radeon RX 6700 XT", L"88 °C · " + text::Format(S(Str::CardRpm), {L"1460"}), 1, MetricId::Gpu},
-        {L"Samsung SSD 980 PRO 1TB (C:)", L"41 °C", 0, MetricId::Disk},
+        {L"CPU", L"59 °C", rpm(L"2591"), 0.49f, 0, MetricId::Cpu, false},
+        {L"GPU", L"88 °C", rpm(L"1460"), 0.85f, 1, MetricId::Gpu, false},
+        {L"NVMe C:", L"41 °C", L"Samsung SSD 980 PRO 1TB", 0.35f, 0, MetricId::Disk, false},
+        {L"SSD D:", L"72 °C", L"TGT-SLST-120", 0.87f, 2, MetricId::Disk, false},
+        {S(Str::CardFanCase), rpm(L"1205"), L"Fan #1", -1.0f, 0, MetricId::Cpu, true},
     };
     model.notice = text::Format(S(Str::CardUpdateAvailable), {L"1.1.0"});
     return model;

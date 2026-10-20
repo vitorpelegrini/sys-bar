@@ -24,12 +24,13 @@ struct Block {
     void Put(size_t at, T v) {
         std::memcpy(bytes.data() + at, &v, sizeof(T));
     }
-    void Add(uint8_t kind, uint8_t group, float value, const std::wstring& name) {
+    void Add(uint8_t kind, uint8_t group, float value, const std::wstring& name, uint8_t role = 0) {
         uint32_t count;
         std::memcpy(&count, bytes.data() + 12, 4);
         const size_t at = feed::kHeaderSize + count * feed::kEntrySize;
         bytes[at] = kind;
         bytes[at + 1] = group;
+        bytes[at + 2] = role;
         Put<float>(at + 4, value);
         for (size_t c = 0; c < name.size() && c < feed::kNameChars; ++c) Put<wchar_t>(at + 8 + c * 2, name[c]);
         Put<uint32_t>(12, count + 1);
@@ -128,6 +129,26 @@ TEST(Feed_absent_service_is_harmless) {
     const bool fresh = reader.Read(d);
     std::printf("      advanced sensors service: %s (installed: %s)\n", fresh ? "publishing" : "not publishing",
                 feed::ServiceInstalled() ? "yes" : "no");
+}
+
+TEST(Feed_reads_fan_roles_and_stopped_fans) {
+    Block b;
+    b.Add(1, 3, 2591.0f, L"Fan #2", 1);      // CPU
+    b.Add(1, 3, 1205.0f, L"Fan #1", 3);      // case
+    b.Add(1, 1, 0.0f, L"AMD Radeon RX", 2);  // GPU fan stopped (zero-RPM mode)
+    b.Add(1, 3, 900.0f, L"Fan #3", 42);      // unknown role from a future service
+    b.Add(0, 2, 40.0f, L"Some SSD", 1);      // roles only apply to fans
+    feed::Decoded d;
+    CHECK(b.Decode(d));
+    CHECK_EQ(d.readings.size(), size_t{5});
+    if (d.readings.size() == 5) {
+        CHECK(d.readings[0].role == FanRole::Cpu);
+        CHECK(d.readings[1].role == FanRole::Case);
+        CHECK(d.readings[2].role == FanRole::Gpu);
+        CHECK_EQ(d.readings[2].value, 0.0);
+        CHECK(d.readings[3].role == FanRole::Unknown);
+        CHECK(d.readings[4].role == FanRole::Unknown);
+    }
 }
 
 TEST(Feed_reads_the_service_version) {

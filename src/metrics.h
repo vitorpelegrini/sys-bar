@@ -33,13 +33,16 @@ struct DiskSnapshot {
 
 enum class SensorKind { Temperature, Fan };
 enum class SensorGroup { Cpu, Gpu, Disk, Board };
+// What a fan cools (sensors/SharedBlock.cs: Role). Unknown for unlabeled motherboard headers.
+enum class FanRole { Unknown, Cpu, Gpu, Case, Pump, Psu };
 
 // A reading for the card's "Sensors" section.
 struct SensorReading {
     SensorKind kind = SensorKind::Temperature;
     SensorGroup group = SensorGroup::Cpu;
-    std::wstring name;   // "GPU", "NVMe · GVR1TB", "CPU fan"
-    double value = 0.0;  // °C or RPM
+    std::wstring name;   // "CPU", GPU adapter name, "Fan #2", SATA drive model
+    double value = 0.0;  // °C or RPM (a fan at 0 RPM is stopped)
+    FanRole role = FanRole::Unknown;
 };
 
 struct MetricsSnapshot {
@@ -65,7 +68,7 @@ struct MetricsSnapshot {
     std::optional<double> cpuTemperature;  // °C (advanced sensors)
     std::optional<double> gpuTemperature;  // °C, main GPU
     std::optional<double> gpuFanRpm;
-    std::vector<SensorReading> sensors;  // everything known, for the card
+    std::vector<SensorReading> sensors;  // CPU, GPUs, fans and service-only drives (disks have their own)
 };
 
 struct SystemInfo {

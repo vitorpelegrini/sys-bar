@@ -82,6 +82,10 @@ bool CanHide(const Settings& settings, MetricId id, const Availability& availabl
 // 0 = normal, 1 = warm (amber), 2 = hot (red). Processors (CPU/GPU) warm at 85 °C and are hot at
 // 95 °C; drives warm at 60 °C and are hot at 70 °C.
 int TemperatureLevel(MetricId id, double celsius);
+// Number of a generic fan name: "Fan #2" -> "2"; other names are returned unchanged.
+std::wstring FanNumber(const std::wstring& name);
+// Fill of the card's temperature gauge, 0..1: 20 °C empty, full at 100 °C (processors) or 80 °C (drives).
+float TemperatureGauge(MetricId id, double celsius);
 
 // ---- Disks ------------------------------------------------------------------------------------
 // Separate strip columns (and card rows) per physical disk, when the user wants them and there are

@@ -29,14 +29,32 @@ constexpr float kSepToHint = 13.0f;
 constexpr float kIndent = 15.0f;  // text indent next to the colored marker
 constexpr float kMinGap = 20.0f;  // minimum space between left and right aligned texts
 constexpr int kShadowSteps = 14;
-constexpr float kSectionGap = 16.0f;      // last graph -> "Sensors" title
-constexpr float kSectionTitleGap = 4.0f;  // title baseline -> first sensor line
-constexpr float kSensorLine = 18.0f;      // height of one sensor line
-constexpr float kSensorBase = 13.0f;      // baseline offset inside a sensor line
+constexpr float kSectionGap = 18.0f;       // last graph -> "Sensors" title
+constexpr float kSectionTitleGap = 10.0f;  // title baseline -> first tile
+constexpr float kTileGap = 8.0f;           // between tiles, both directions
+constexpr float kTilePad = 10.0f;          // inside a tile
+constexpr float kTileRadius = 6.0f;
+constexpr float kTileTitleSize = 11.0f;
+constexpr float kTileValueSize = 13.0f;
+constexpr float kTileDetailSize = 10.5f;
+constexpr float kTileToGauge = 8.0f;  // value baseline -> gauge
+constexpr float kGaugeHeight = 3.0f;
+constexpr float kGaugeToDetail = 7.0f;  // gauge -> detail cap height
+constexpr float kHintLine = 18.0f;      // the faint line under the tiles
+constexpr int kTileColumns = 2;
 constexpr float kNoticeGap = 12.0f;
 
 float RowHeight() {
     return kValueSize * kCap + kValueToSub + kSubToSpark + kSparkHeight;
+}
+
+float TileHeight() {
+    return kTilePad + kTileValueSize * kCap + kTileToGauge + kGaugeHeight + kGaugeToDetail + kTileDetailSize * kCap +
+           kTilePad;
+}
+
+size_t TileRows(size_t tiles) {
+    return (tiles + kTileColumns - 1) / kTileColumns;
 }
 
 bool HasSensors(const CardModel& m) {
@@ -47,8 +65,10 @@ bool HasSensors(const CardModel& m) {
 float ExtraHeight(const CardModel& m) {
     float h = 0.0f;
     if (HasSensors(m)) {
-        const size_t lines = m.sensors.size() + (m.sensorsHint.empty() ? 0 : 1);
-        h += kSectionGap + kSmallSize * kCap + kSectionTitleGap + static_cast<float>(lines) * kSensorLine;
+        const size_t rows = TileRows(m.sensors.size());
+        h += kSectionGap + kSmallSize * kCap + kSectionTitleGap;
+        if (rows) h += static_cast<float>(rows) * TileHeight() + static_cast<float>(rows - 1) * kTileGap;
+        if (!m.sensorsHint.empty()) h += (rows ? 6.0f : 0.0f) + kHintLine;
     }
     if (!m.notice.empty()) h += kNoticeGap + kSmallSize * kCap;
     return h;
@@ -118,10 +138,12 @@ SIZE Card::Measure(UINT dpi, const CardModel& model) {
     const float hintLeft = width(model.hintLeft, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
     const float hintRight = width(model.hintRight, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
     needed = std::max(needed, hintLeft + hintRight + (hintLeft > 0 && hintRight > 0 ? kMinGap : 0.0f));
-    for (const CardSensorLine& line : model.sensors) {
-        // Names are ellipsized, so only the value and a reasonable part of the name must fit.
-        needed = std::max(needed, std::min(width(line.name, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL), 200.0f) + kMinGap +
-                                      width(line.value, kSmallSize, DWRITE_FONT_WEIGHT_SEMI_BOLD));
+    for (const CardSensorLine& tile : model.sensors) {
+        // Titles are ellipsized, so only the value and a short part of the title must fit in a tile.
+        const float tileWidth = 2.0f * kTilePad + 10.0f +
+                                std::min(width(tile.title, kTileTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD), 80.0f) +
+                                12.0f + width(tile.value, kTileValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+        needed = std::max(needed, kTileColumns * tileWidth + (kTileColumns - 1) * kTileGap);
     }
     needed = std::max(needed, width(model.sensorsHint, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL));
     needed = std::max(needed, width(model.notice, kSmallSize, DWRITE_FONT_WEIGHT_SEMI_BOLD));
@@ -251,6 +273,70 @@ void Card::DrawSparkline(const CardRow& row, int capacity, const D2D1_RECT_F& ar
     target_->FillEllipse(D2D1::Ellipse(last, 2.4f, 2.4f), brush_.Get());
 }
 
+void Card::DrawSensorTile(const CardSensorLine& tile, const D2D1_RECT_F& area) {
+    const bool light = theme_.light;
+    const D2D1_COLOR_F strong = Ink(theme_, light ? 0.90f : 0.96f);
+    const D2D1_COLOR_F medium = Ink(theme_, light ? 0.62f : 0.66f);
+    const D2D1_COLOR_F faint = Ink(theme_, 0.46f);
+    const D2D1_COLOR_F accent = tile.fan ? Ink(theme_, 0.40f) : MetricColor(tile.id, 0.0f, theme_);
+    const D2D1_COLOR_F hot = tile.level >= 2   ? MetricColor(tile.id, kCriticalLoad, theme_)
+                             : tile.level == 1 ? MetricColor(tile.id, kWarnLoad, theme_)
+                                               : accent;
+
+    // Tile surface: a faint fill and a hairline, the same language as the graph tracks.
+    brush_->SetColor(Ink(theme_, light ? 0.035f : 0.045f));
+    target_->FillRoundedRectangle(D2D1::RoundedRect(area, kTileRadius, kTileRadius), brush_.Get());
+    if (theme_.highContrast) {
+        brush_->SetColor(FromColorRef(theme_.hcText));
+        target_->DrawRoundedRectangle(D2D1::RoundedRect(area, kTileRadius, kTileRadius), brush_.Get(), 1.0f / scale_);
+    }
+
+    const float left = area.left + kTilePad;
+    const float right = area.right - kTilePad;
+    const float base = area.top + kTilePad + kTileValueSize * kCap;
+
+    auto ellipsize = [&](IDWriteTextLayout* layout, float maxWidth) {
+        if (!layout) return;
+        layout->SetMaxWidth(std::max(maxWidth, 12.0f));
+        ComPtr<IDWriteInlineObject> ellipsis;
+        gfx_.dwrite()->CreateEllipsisTrimmingSign(layout, &ellipsis);
+        DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
+        layout->SetTrimming(&trimming, ellipsis.Get());
+    };
+
+    // Marker dot, title and value (the value turns amber/red when the device runs warm/hot).
+    brush_->SetColor(tile.level > 0 ? hot : accent);
+    target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(left + 3.0f, base - kTileTitleSize * kCap / 2.0f), 3.0f, 3.0f),
+                         brush_.Get());
+    auto value = Text(tile.value, kTileValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    const float valueWidth = value ? TextWidth(value.Get()) : 0.0f;
+    auto title = Text(tile.title, kTileTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+    ellipsize(title.Get(), right - (left + 11.0f) - valueWidth - 8.0f);
+    DrawText(title.Get(), left + 11.0f, base, medium);
+    DrawTextRight(value.Get(), right, base, tile.level > 0 && !theme_.highContrast ? hot : strong);
+
+    // Temperature gauge.
+    const float gaugeTop = Snap(base + kTileToGauge);
+    const float gh = std::max(kGaugeHeight, 2.0f / scale_);
+    if (tile.gauge >= 0.0f) {
+        const float r = gh / 2.0f;
+        brush_->SetColor(Ink(theme_, light ? 0.09f : 0.12f));
+        target_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(left, gaugeTop, right, gaugeTop + gh), r, r),
+                                      brush_.Get());
+        const float fill = std::max((right - left) * std::clamp(tile.gauge, 0.0f, 1.0f), gh);
+        brush_->SetColor(tile.level > 0 ? hot : accent);
+        target_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(left, gaugeTop, left + fill, gaugeTop + gh), r, r),
+                                      brush_.Get());
+    }
+
+    // Detail: the fans of this device, or its model.
+    if (!tile.detail.empty()) {
+        auto detail = Text(tile.detail, kTileDetailSize, DWRITE_FONT_WEIGHT_NORMAL);
+        ellipsize(detail.Get(), right - left);
+        DrawText(detail.Get(), left, gaugeTop + gh + kGaugeToDetail + kTileDetailSize * kCap, faint);
+    }
+}
+
 bool Card::Paint(const CardModel& model) {
     if (size_.cx <= 0 || !EnsureTarget() || !surface_.Ensure(size_.cx, size_.cy)) return false;
     const RECT bounds{0, 0, size_.cx, size_.cy};
@@ -334,35 +420,27 @@ bool Card::Paint(const CardModel& model) {
     }
     if (!model.rows.empty()) y -= kRowGap;
 
-    // Sensors: one line per device (temperature, fan).
+    // Sensors: a grid of tiles, one per device, with its fans (see CardSensorLine).
     if (HasSensors(model)) {
         y += kSectionGap;
         const float titleBase = y + kSmallSize * kCap;
         DrawText(Text(model.sensorsTitle, kSmallSize, DWRITE_FONT_WEIGHT_SEMI_BOLD).Get(), left, titleBase, medium);
         y = titleBase + kSectionTitleGap;
-        for (const CardSensorLine& line : model.sensors) {
-            const float base = y + kSensorBase;
-            auto value = Text(line.value, kSmallSize, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-            const float valueWidth = value ? TextWidth(value.Get()) : 0.0f;
-            auto name = Text(line.name, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
-            if (name) {
-                name->SetMaxWidth(std::max(right - left - valueWidth - 12.0f, 20.0f));
-                ComPtr<IDWriteInlineObject> ellipsis;
-                gfx_.dwrite()->CreateEllipsisTrimmingSign(name.Get(), &ellipsis);
-                DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
-                name->SetTrimming(&trimming, ellipsis.Get());
-            }
-            const D2D1_COLOR_F valueColor = line.level >= 2   ? MetricColor(line.id, kCriticalLoad, theme_)
-                                            : line.level == 1 ? MetricColor(line.id, kWarnLoad, theme_)
-                                                              : strong;
-            DrawText(name.Get(), left, base, medium);
-            DrawTextRight(value.Get(), right, base, valueColor);
-            y += kSensorLine;
+        const float tileW = (right - left - (kTileColumns - 1) * kTileGap) / kTileColumns;
+        const float tileH = TileHeight();
+        for (size_t i = 0; i < model.sensors.size(); ++i) {
+            const CardSensorLine& tile = model.sensors[i];
+            const float x = left + static_cast<float>(i % kTileColumns) * (tileW + kTileGap);
+            const float top = y + static_cast<float>(i / kTileColumns) * (tileH + kTileGap);
+            DrawSensorTile(tile, D2D1::RectF(Snap(x), Snap(top), Snap(x + tileW), Snap(top + tileH)));
         }
+        const size_t rows = TileRows(model.sensors.size());
+        if (rows) y += static_cast<float>(rows) * tileH + static_cast<float>(rows - 1) * kTileGap;
         if (!model.sensorsHint.empty()) {
-            DrawText(Text(model.sensorsHint, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL).Get(), left, y + kSensorBase,
+            if (rows) y += 6.0f;
+            DrawText(Text(model.sensorsHint, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL).Get(), left, y + kHintLine - 5.0f,
                      faint);
-            y += kSensorLine;
+            y += kHintLine;
         }
     }
 

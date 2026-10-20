@@ -262,6 +262,18 @@ TEST(Disk_strip_labels) {
     CHECK_EQ(logic::DiskStripLabel(DiskKind::Unknown, L"F:", 3, L"DISCO"), std::wstring(L"DISCO F:"));
 }
 
+TEST(Fan_numbers_and_temperature_gauges) {
+    CHECK_EQ(logic::FanNumber(L"Fan #2"), std::wstring(L"2"));
+    CHECK_EQ(logic::FanNumber(L"Fan #12"), std::wstring(L"12"));
+    CHECK_EQ(logic::FanNumber(L"Fan #"), std::wstring(L"Fan #"));
+    CHECK_EQ(logic::FanNumber(L"Rear exhaust"), std::wstring(L"Rear exhaust"));
+    CHECK_NEAR(logic::TemperatureGauge(MetricId::Cpu, 20.0), 0.0, 1e-6);
+    CHECK_NEAR(logic::TemperatureGauge(MetricId::Cpu, 60.0), 0.5, 1e-6);
+    CHECK_NEAR(logic::TemperatureGauge(MetricId::Gpu, 120.0), 1.0, 1e-6);
+    CHECK_NEAR(logic::TemperatureGauge(MetricId::Disk, 50.0), 0.5, 1e-6);
+    CHECK_NEAR(logic::TemperatureGauge(MetricId::Disk, -5.0), 0.0, 1e-6);
+}
+
 TEST(Temperature_levels) {
     CHECK_EQ(TemperatureLevel(MetricId::Cpu, 60.0), 0);
     CHECK_EQ(TemperatureLevel(MetricId::Cpu, 85.0), 1);

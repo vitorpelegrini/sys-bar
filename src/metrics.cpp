@@ -477,7 +477,8 @@ std::wstring Normalized(const std::wstring& s) {
     return out;
 }
 
-// "Samsung SSD 870 EVO 1TB" (LibreHardwareMonitor) vs "Samsung SSD 870 EVO 1TB" (storage IOCTL).
+// Same device under two names: "Samsung SSD 870 EVO 1TB" (LibreHardwareMonitor) vs the storage IOCTL
+// model, or "AMD Radeon RX 6700 XT" (LibreHardwareMonitor) vs the DXGI adapter description.
 bool SameDrive(const std::wstring& a, const std::wstring& b) {
     const std::wstring x = Normalized(a), y = Normalized(b);
     return !x.empty() && !y.empty() && (x.find(y) != std::wstring::npos || y.find(x) != std::wstring::npos);
@@ -488,7 +489,7 @@ bool SameDrive(const std::wstring& a, const std::wstring& b) {
 void MetricsSampler::CollectSensors(MetricsSnapshot& out) {
     // Advanced sensors (optional service): CPU temperature, fans, SATA temperatures.
     feed::Decoded advanced;
-    std::vector<SensorReading> fans, extraDrives;
+    std::vector<SensorReading> fans, gpuFans, extraDrives;
     if (feed_ && feed_->Read(advanced)) {
         out.advancedSensors = true;
         // sys-bar updates itself without admin rights; the service (in Program Files) catches up on its own
@@ -504,7 +505,7 @@ void MetricsSampler::CollectSensors(MetricsSnapshot& out) {
         for (SensorReading& r : advanced.readings) {
             if (r.group == SensorGroup::Cpu) continue;  // already in cpuTemperature
             if (r.kind == SensorKind::Fan) {
-                fans.push_back(std::move(r));
+                (r.group == SensorGroup::Gpu ? gpuFans : fans).push_back(std::move(r));
                 continue;
             }
             if (r.group == SensorGroup::Disk) {
@@ -529,16 +530,15 @@ void MetricsSampler::CollectSensors(MetricsSnapshot& out) {
         if (reading.temperature) {
             out.sensors.push_back({SensorKind::Temperature, SensorGroup::Gpu, adapters_[i].name, *reading.temperature});
         }
-        if (reading.fanRpm)
-            out.sensors.push_back({SensorKind::Fan, SensorGroup::Gpu, adapters_[i].name, *reading.fanRpm});
+        // The service tells a stopped fan (0 RPM) from a missing one, which D3DKMT cannot: prefer it.
+        std::optional<double> fan = reading.fanRpm;
+        for (const SensorReading& f : gpuFans) {
+            if (SameDrive(f.name, adapters_[i].name) || (adapters_.size() == 1 && gpuFans.size() == 1)) fan = f.value;
+        }
+        if (fan) {
+            out.sensors.push_back({SensorKind::Fan, SensorGroup::Gpu, adapters_[i].name, *fan, FanRole::Gpu});
+        }
     }
-    for (SensorReading& fan : fans) out.sensors.push_back(std::move(fan));
-    for (const DiskSnapshot& disk : out.disks) {
-        if (!disk.temperature) continue;
-        std::wstring name = disk.model.empty() ? L"Disk " + std::to_wstring(disk.number) : disk.model;
-        if (const wchar_t* kind = hw::DiskKindName(disk.kind); *kind) name = std::wstring(kind) + L" · " + name;
-        if (!disk.letters.empty()) name += L" (" + disk.letters + L")";
-        out.sensors.push_back({SensorKind::Temperature, SensorGroup::Disk, name, *disk.temperature});
-    }
+    for (SensorReading& f : fans) out.sensors.push_back(std::move(f));
     for (SensorReading& drive : extraDrives) out.sensors.push_back(std::move(drive));
 }

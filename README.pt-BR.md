@@ -37,7 +37,8 @@
   Fahrenheit: automático pela região do Windows, ou escolhido no menu.
   - Temperatura e fan da GPU, e temperatura dos NVMe, sem precisar de driver.
   - Os **sensores avançados** opcionais acrescentam a temperatura da CPU, as fans da placa-mãe e de
-    controladoras e a temperatura de discos SATA (veja abaixo).
+    controladoras e a temperatura de discos SATA (veja abaixo). Cada fan é associada ao que ela resfria (CPU,
+    GPU, gabinete, bomba, fonte), e a fan da GPU parada no modo zero RPM aparece como parada.
 - **Se atualiza sozinho.** Consulta as Releases do GitHub uma vez por dia. As atualizações são verificadas por
   SHA-256 e instaladas em silêncio.
 - **Card ao passar o mouse.** Mostra o modelo do hardware, os picos e um gráfico do último minuto

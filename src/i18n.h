@@ -80,6 +80,11 @@ enum class Str {
     MenuDisks,
     MenuDisksEach,
     MenuDisksCombined,
+    CardFanCase,
+    CardFanPump,
+    CardFanPsu,
+    CardFanGeneric,
+    CardFanStopped,
     Count,
 };
 

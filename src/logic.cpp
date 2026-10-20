@@ -131,6 +131,21 @@ std::wstring DiskStripLabel(hw::DiskKind kind, const std::wstring& letters, int 
     return label;
 }
 
+std::wstring FanNumber(const std::wstring& name) {
+    const auto hash = name.rfind(L'#');
+    if (hash == std::wstring::npos || hash + 1 >= name.size()) return name;
+    const std::wstring digits = name.substr(hash + 1);
+    for (wchar_t c : digits) {
+        if (c < L'0' || c > L'9') return name;
+    }
+    return digits;
+}
+
+float TemperatureGauge(MetricId id, double celsius) {
+    const double full = id == MetricId::Disk ? 80.0 : 100.0;
+    return static_cast<float>(std::clamp((celsius - 20.0) / (full - 20.0), 0.0, 1.0));
+}
+
 int TemperatureLevel(MetricId id, double celsius) {
     const bool drive = id == MetricId::Disk;
     const double warm = drive ? 60.0 : 85.0;

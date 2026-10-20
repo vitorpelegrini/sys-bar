@@ -17,12 +17,18 @@ struct CardRow {
     std::vector<float> history;  // oldest to newest, 0..1
 };
 
-// One line of the "Sensors" section: "AMD Radeon RX 6700 XT     54 °C · 576 RPM".
+// One tile of the "Sensors" grid: a device with its temperature and the fans that cool it.
+//   CPU                59 °C
+//   ━━━━━━━━━━━━━──────────      <- gauge (omitted for fan-only tiles)
+//   2591 RPM                     <- detail: fans, or the device model
 struct CardSensorLine {
-    std::wstring name;
-    std::wstring value;
+    std::wstring title;           // "CPU", "GPU", "NVMe C:", "Case fan"
+    std::wstring value;           // "59 °C", "1205 RPM"
+    std::wstring detail;          // "2591 RPM", "fan stopped", "GVR1TB"
+    float gauge = -1.0f;          // 0..1 temperature gauge; < 0 = none
     int level = 0;                // 0 normal, 1 warm, 2 hot
-    MetricId id = MetricId::Cpu;  // palette used for warm/hot
+    MetricId id = MetricId::Cpu;  // palette of the marker and the gauge
+    bool fan = false;             // fan-only tile: neutral marker
 };
 
 struct CardModel {
@@ -59,6 +65,7 @@ private:
     void DrawText(IDWriteTextLayout* layout, float x, float baseline, const D2D1_COLOR_F& color);
     void DrawTextRight(IDWriteTextLayout* layout, float right, float baseline, const D2D1_COLOR_F& color);
     void DrawSparkline(const CardRow& row, int capacity, const D2D1_RECT_F& area);
+    void DrawSensorTile(const CardSensorLine& tile, const D2D1_RECT_F& area);
     float Snap(float dip) const;
 
     const Gfx& gfx_;

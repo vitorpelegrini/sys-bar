@@ -771,27 +771,79 @@ CardModel App::BuildCardModel() const {
         }
     }
 
-    // Sensors: one line per device, temperature and fan together ("54 °C · 576 RPM").
-    for (const SensorReading& reading : s.sensors) {
-        const MetricId group = reading.group == SensorGroup::Gpu    ? MetricId::Gpu
-                               : reading.group == SensorGroup::Disk ? MetricId::Disk
-                                                                    : MetricId::Cpu;
-        auto line = std::find_if(model.sensors.begin(), model.sensors.end(),
-                                 [&](const CardSensorLine& l) { return l.name == reading.name; });
-        if (line == model.sensors.end()) {
-            model.sensors.push_back({reading.name, L"", 0, group});
-            line = model.sensors.end() - 1;
+    // Sensors: one tile per device, with the fans that cool it (see CardSensorLine).
+    const bool fahrenheit = settings_.Fahrenheit();
+    auto rpm = [&](double value) {
+        if (value < 1.0) return std::wstring(S(i18n::Str::CardFanStopped));  // zero-RPM mode at idle
+        return text::Format(S(i18n::Str::CardRpm), {std::to_wstring(static_cast<int>(std::lround(value)))});
+    };
+    auto join = [](std::wstring& into, const std::wstring& part) { into += (into.empty() ? L"" : L" · ") + part; };
+    auto temperatureTile = [&](MetricId id, std::wstring title, double celsius) {
+        CardSensorLine tile;
+        tile.id = id;
+        tile.title = std::move(title);
+        tile.value = text::TemperatureText(celsius, fahrenheit);
+        tile.gauge = logic::TemperatureGauge(id, celsius);
+        tile.level = settings_.colorByLoad ? logic::TemperatureLevel(id, celsius) : 0;
+        return tile;
+    };
+
+    // CPU, with its fans (and an AIO pump) as the detail.
+    std::optional<CardSensorLine> cpuTile;
+    if (s.cpuTemperature) cpuTile = temperatureTile(MetricId::Cpu, L"CPU", *s.cpuTemperature);
+    for (const SensorReading& r : s.sensors) {
+        if (r.kind != SensorKind::Fan || r.role != FanRole::Cpu) continue;
+        if (!cpuTile) cpuTile = CardSensorLine{L"CPU", L"", L"", -1.0f, 0, MetricId::Cpu, false};
+        join(cpuTile->detail, rpm(r.value));
+    }
+    if (cpuTile) model.sensors.push_back(std::move(*cpuTile));
+
+    // GPUs ("GPU", or "GPU 1", "GPU 2" with several), with their fan.
+    size_t gpus = 0;
+    for (const SensorReading& r : s.sensors) gpus += r.group == SensorGroup::Gpu && r.kind == SensorKind::Temperature;
+    size_t gpuIndex = 0;
+    for (const SensorReading& r : s.sensors) {
+        if (r.group != SensorGroup::Gpu || r.kind != SensorKind::Temperature) continue;
+        std::wstring title = gpus > 1 ? L"GPU " + std::to_wstring(++gpuIndex) : L"GPU";
+        CardSensorLine tile = temperatureTile(MetricId::Gpu, std::move(title), r.value);
+        for (const SensorReading& f : s.sensors) {
+            if (f.group == SensorGroup::Gpu && f.kind == SensorKind::Fan && f.name == r.name)
+                join(tile.detail, rpm(f.value));
         }
-        std::wstring value;
-        if (reading.kind == SensorKind::Temperature) {
-            value = text::TemperatureText(reading.value, settings_.Fahrenheit());
-            if (settings_.colorByLoad)
-                line->level = std::max(line->level, logic::TemperatureLevel(group, reading.value));
-        } else {
-            value =
-                text::Format(S(i18n::Str::CardRpm), {std::to_wstring(static_cast<int>(std::lround(reading.value)))});
+        if (tile.detail.empty()) tile.detail = r.name;
+        model.sensors.push_back(std::move(tile));
+    }
+
+    // Drives: "NVMe C:" with the model as the detail; then drives only the service could read.
+    for (const DiskSnapshot& disk : s.disks) {
+        if (!disk.temperature) continue;
+        CardSensorLine tile = temperatureTile(
+            MetricId::Disk, logic::DiskStripLabel(disk.kind, disk.letters, disk.number, S(i18n::Str::CardDisk)),
+            *disk.temperature);
+        tile.detail = disk.model;
+        model.sensors.push_back(std::move(tile));
+    }
+    for (const SensorReading& r : s.sensors) {
+        if (r.group == SensorGroup::Disk && r.kind == SensorKind::Temperature) {
+            model.sensors.push_back(temperatureTile(MetricId::Disk, r.name, r.value));
         }
-        line->value = line->value.empty() ? value : line->value + L" · " + value;
+    }
+
+    // Remaining fans: case, pump, power supply, or an unlabeled header ("Fan 3").
+    for (const SensorReading& r : s.sensors) {
+        if (r.kind != SensorKind::Fan || r.group == SensorGroup::Gpu || r.role == FanRole::Cpu) continue;
+        CardSensorLine tile;
+        tile.fan = true;
+        tile.id = MetricId::Cpu;
+        tile.value = rpm(r.value);
+        switch (r.role) {
+            case FanRole::Case: tile.title = S(i18n::Str::CardFanCase); break;
+            case FanRole::Pump: tile.title = S(i18n::Str::CardFanPump); break;
+            case FanRole::Psu: tile.title = S(i18n::Str::CardFanPsu); break;
+            default: tile.title = text::Format(S(i18n::Str::CardFanGeneric), {logic::FanNumber(r.name)}); break;
+        }
+        if (r.role != FanRole::Unknown) tile.detail = r.name;  // "Fan #1": which header it is
+        model.sensors.push_back(std::move(tile));
     }
     if (!s.advancedSensors && !SensorsTool().empty()) model.sensorsHint = S(i18n::Str::CardSensorsHint);
     if (!model.sensors.empty() || !model.sensorsHint.empty()) model.sensorsTitle = S(i18n::Str::CardSensors);

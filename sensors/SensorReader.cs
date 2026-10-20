@@ -14,7 +14,8 @@ namespace SysBar.Sensors
 
         public SensorReader()
         {
-            // GPUs are read natively by sys-bar (D3DKMT); memory/network/battery are not needed.
+            // GPU temperatures are read natively by sys-bar (D3DKMT); the GPU is only opened here for its fan,
+            // which D3DKMT cannot tell apart from "stopped" (zero-RPM mode). Memory/network/battery are not needed.
             _computer = new Computer
             {
                 IsCpuEnabled = true,
@@ -22,7 +23,7 @@ namespace SysBar.Sensors
                 IsControllerEnabled = true,
                 IsStorageEnabled = true,
                 IsPsuEnabled = true,
-                IsGpuEnabled = false,
+                IsGpuEnabled = true,
                 IsMemoryEnabled = false,
                 IsNetworkEnabled = false,
                 IsBatteryEnabled = false,
@@ -33,6 +34,7 @@ namespace SysBar.Sensors
         public (float cpuTemperature, List<Reading> readings) Read()
         {
             var readings = new List<Reading>();
+            var boardFans = new List<(IHardware item, string name, float rpm)>();
             float cpu = float.NaN;
             DateTime now = DateTime.UtcNow;
             bool refreshStorage = now - _lastStorageUpdate >= StorageInterval;
@@ -58,6 +60,16 @@ namespace SysBar.Sensors
                         }
                         break;
                 }
+                if (IsGpu(hardware.HardwareType))
+                {
+                    // A GPU fan at 0 RPM is a stopped fan (zero-RPM mode at idle), worth showing as such.
+                    ISensor? fan = hardware.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Fan);
+                    if (fan?.Value is float gpuRpm && gpuRpm >= 0f && gpuRpm < 20000f)
+                    {
+                        readings.Add(new Reading(Kind.Fan, Group.Gpu, hardware.Name, gpuRpm, Role.Gpu));
+                    }
+                    continue;
+                }
                 // Fans: motherboard Super I/O chips, embedded controllers, fan controllers, PSUs.
                 foreach (IHardware item in Flatten(hardware))
                 {
@@ -65,14 +77,28 @@ namespace SysBar.Sensors
                     {
                         if (sensor.SensorType == SensorType.Fan && sensor.Value is float rpm && rpm >= 1f && rpm < 20000f)
                         {
-                            readings.Add(new Reading(Kind.Fan, Group.Board, sensor.Name, rpm));
+                            boardFans.Add((item, sensor.Name, rpm));
                         }
                     }
                 }
             }
+            foreach (var (item, name, rpm) in boardFans)
+            {
+                Role role = item.HardwareType == HardwareType.Psu ? Role.Psu : FanRoles.FromName(name);
+                // Boards LibreHardwareMonitor does not know report "Fan #1", "Fan #2"...: fall back on the Super I/O
+                // reference wiring, or on the only fan there is (a desktop always has its CPU fan connected).
+                if (role == Role.Unknown && item.HardwareType == HardwareType.SuperIO)
+                {
+                    role = FanRoles.FromChip(item.Name, name, boardFans.Count(f => f.item.HardwareType == HardwareType.SuperIO));
+                }
+                readings.Add(new Reading(Kind.Fan, Group.Board, name, rpm, role));
+            }
             if (!float.IsNaN(cpu)) readings.Insert(0, new Reading(Kind.Temperature, Group.Cpu, "CPU", cpu));
             return (cpu, readings);
         }
+
+        private static bool IsGpu(HardwareType type) =>
+            type == HardwareType.GpuAmd || type == HardwareType.GpuNvidia || type == HardwareType.GpuIntel;
 
         // Prefers the package/die temperature, falling back to the hottest core.
         private static float? CpuTemperature(IHardware cpu)

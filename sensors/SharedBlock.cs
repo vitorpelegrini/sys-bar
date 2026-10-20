@@ -13,20 +13,25 @@ namespace SysBar.Sensors
     /// <summary>Hardware group of a reading. Must match <c>SensorGroup</c> in src/metrics.h.</summary>
     internal enum Group : byte { Cpu = 0, Gpu = 1, Disk = 2, Board = 3 }
 
+    /// <summary>What a fan cools. Must match <c>FanRole</c> in src/metrics.h.</summary>
+    internal enum Role : byte { Unknown = 0, Cpu = 1, Gpu = 2, Case = 3, Pump = 4, Psu = 5 }
+
     internal readonly struct Reading
     {
-        public Reading(Kind kind, Group group, string name, float value)
+        public Reading(Kind kind, Group group, string name, float value, Role role = Role.Unknown)
         {
             Kind = kind;
             Group = group;
             Name = name;
             Value = value;
+            Role = role;
         }
 
         public Kind Kind { get; }
         public Group Group { get; }
         public string Name { get; }
         public float Value { get; }
+        public Role Role { get; }
     }
 
     /// <summary>
@@ -36,7 +41,7 @@ namespace SysBar.Sensors
     ///  0 uint32 magic 'SBS1'     4 uint32 version (1)    8 uint32 sequence (odd while writing)
     /// 12 uint32 count           16 int64 updated (FILETIME, UTC)
     /// 24 float  cpuTemperature (NaN = unknown)           28 uint32 service version (major&lt;&lt;20|minor&lt;&lt;10|patch)
-    /// 32 entries[64] x 128 bytes: kind u8, group u8, reserved u16, value f32, name wchar[60]
+    /// 32 entries[64] x 128 bytes: kind u8, group u8, role u8 (fans), reserved u8, value f32, name wchar[60]
     /// </code>
     /// Clients ask for fresh data by setting the "wanted" event; when nobody asks, the service idles.
     /// </summary>
@@ -109,6 +114,8 @@ namespace SysBar.Sensors
                 Reading r = readings[i];
                 _view.Write(at, (byte)r.Kind);
                 _view.Write(at + 1, (byte)r.Group);
+                _view.Write(at + 2, (byte)r.Role);
+                _view.Write(at + 3, (byte)0);
                 _view.Write(at + 4, r.Value);
                 string name = r.Name.Length > NameChars - 1 ? r.Name.Substring(0, NameChars - 1) : r.Name;
                 for (int c = 0; c < NameChars; c++)
