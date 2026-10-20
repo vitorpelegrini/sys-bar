@@ -4,6 +4,7 @@
 #include "settings.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace logic {
 namespace {
@@ -234,14 +235,20 @@ std::wstring FanNumber(const std::wstring& name) {
 
 float TemperatureGauge(MetricId id, double celsius) {
     const double full = id == MetricId::Disk ? 80.0 : 100.0;
+    if (!std::isfinite(celsius)) return 0.0f;
     return static_cast<float>(std::clamp((celsius - 20.0) / (full - 20.0), 0.0, 1.0));
 }
 
+double WarmTemperature(MetricId id) {
+    return id == MetricId::Disk ? 60.0 : 85.0;
+}
+
+double HotTemperature(MetricId id) {
+    return id == MetricId::Disk ? 70.0 : 95.0;
+}
+
 int TemperatureLevel(MetricId id, double celsius) {
-    const bool drive = id == MetricId::Disk;
-    const double warm = drive ? 60.0 : 85.0;
-    const double hot = drive ? 70.0 : 95.0;
-    return celsius >= hot ? 2 : celsius >= warm ? 1 : 0;
+    return celsius >= HotTemperature(id) ? 2 : celsius >= WarmTemperature(id) ? 1 : 0;
 }
 
 }  // namespace logic

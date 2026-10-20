@@ -333,8 +333,11 @@ TEST(Card_scales_with_dpi) {
 TEST(Card_grows_for_long_translations) {
     Card card(SharedGfx());
     CardModel model = DemoCard(i18n::Lang::English);
+    model.rows.resize(1);  // a narrow card, so the footer decides the width
+    model.sensors.clear();
     card.Measure(96, model);
     const float normal = card.WidthDip();
+    card.ForgetWidth();
     model.footerLeft = L"A very long hint text that would never fit in the default width";
     card.Measure(96, model);
     CHECK(card.WidthDip() > normal);
@@ -547,4 +550,24 @@ TEST(Card_fits_short_screens_with_many_disks) {
         CHECK(card.Paint(model));
         SavePreview(card.surface(), L"card-many-disks-" + std::to_wstring(screen.workHeightPx), 0x2B2F36);
     }
+}
+
+TEST(Card_size_does_not_follow_live_values) {
+    // Regression: "36 KB/s" -> "128 KB/s" made the card reflow and change width every second.
+    auto withRates = [](const wchar_t* read, const wchar_t* write, const wchar_t* percent) {
+        CardModel model = DemoCard(i18n::Lang::Portuguese);
+        CardRow& disk = model.rows.back();
+        disk.half = true;
+        disk.value = percent;
+        disk.subtitle = text::Chip(icon::kDrive, L"GVR1TB") + L"\n" +
+                        text::JoinChips({text::Chip(icon::kDown, read), text::Chip(icon::kUp, write)});
+        CardRow second = disk;
+        model.rows.push_back(second);
+        return model;
+    };
+    Card a(SharedGfx()), b(SharedGfx());
+    const SIZE low = a.Measure(96, withRates(L"0,0 KB/s", L"1,1 KB/s", L"0%"));
+    const SIZE high = b.Measure(96, withRates(L"128 MB/s", L"999 KB/s", L"100%"));
+    CHECK_EQ(low.cx, high.cx);
+    CHECK_EQ(low.cy, high.cy);
 }

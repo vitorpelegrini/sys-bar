@@ -1043,8 +1043,11 @@ CardModel App::BuildCardModel() const {
                 const wchar_t* kind = hw::DiskKindName(disk.kind);
                 std::wstring title = *kind ? kind : S(i18n::Str::CardDisk);
                 if (!disk.letters.empty()) title += L" (" + disk.letters + L")";
-                std::wstring subtitle = io(disk.readBps, disk.writeBps);
-                if (!disk.model.empty()) subtitle = text::JoinChips({text::Chip(icon::kDrive, disk.model), subtitle});
+                // Side by side, so compact: the model, then read/write on their own line with just the
+                // arrows (the line never changes shape as the rates change).
+                std::wstring subtitle = text::JoinChips(
+                    {text::Chip(icon::kDown, RateText(disk.readBps)), text::Chip(icon::kUp, RateText(disk.writeBps))});
+                if (!disk.model.empty()) subtitle = text::Chip(icon::kDrive, disk.model) + L"\n" + subtitle;
                 percentRow(MetricId::Disk, kDiskKeyBase + disk.number, title, disk.active, std::move(subtitle));
                 model.rows.back().half = true;  // drives side by side: the card stays short
             }
@@ -1087,6 +1090,9 @@ CardModel App::BuildCardModel() const {
         tile.title = std::move(title);
         tile.value = text::TemperatureText(celsius, fahrenheit);
         tile.gauge = logic::TemperatureGauge(id, celsius);
+        tile.warmAt = logic::TemperatureGauge(id, logic::WarmTemperature(id));
+        tile.hotAt = logic::TemperatureGauge(id, logic::HotTemperature(id));
+        tile.tickStep = logic::TemperatureGauge(id, 30.0);  // 10 °C above the scale's 20 °C start
         tile.level = settings_.colorByLoad ? logic::TemperatureLevel(id, celsius) : 0;
         return tile;
     };
@@ -1235,6 +1241,7 @@ void App::OnCardFadeTick() {
         KillTimer(controller_, kCardFadeTimer);
         ShowWindow(cardWindow_, SW_HIDE);
         cardVisible_ = false;
+        card_.ForgetWidth();
         return;
     }
     PresentCard();  // only re-presents the painted bitmap with a new alpha/position (cheap)

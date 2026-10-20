@@ -46,8 +46,10 @@ constexpr float kTileRadius = 6.0f;
 constexpr float kTileTitleSize = 11.0f;
 constexpr float kTileValueSize = 13.0f;
 constexpr float kTileDetailSize = 10.5f;
-constexpr float kTileToGauge = 8.0f;    // value baseline -> gauge
-constexpr float kGaugeHeight = 12.0f;   // thermometer bulb diameter
+constexpr float kTileToGauge = 8.0f;   // value baseline -> gauge
+constexpr float kGaugeHeight = 14.0f;  // thermometer: bulb diameter plus the scale marks below the tube
+constexpr float kBulbSize = 12.0f;
+constexpr float kEmojiSize = 11.5f;     // the snowflake and the flame at the thermometer's ends
 constexpr float kGaugeToDetail = 6.0f;  // thermometer -> detail cap height
 constexpr float kHintLine = 18.0f;      // the faint line under the tiles
 constexpr float kNoticeGap = 12.0f;
@@ -93,6 +95,22 @@ float LineTextHeight(bool half, float extra) {
 // A whole metric tile: padding, texts and graph.
 float LineHeight(bool half, float extra, float spark) {
     return kRowPad + LineTextHeight(half, extra) + spark + kRowPad;
+}
+
+// Live text measured at its widest: every number (with its separators) counts as "888,8", the widest a
+// value gets. The card's width then depends on the labels, never on the readings of the moment.
+std::wstring Stable(const std::wstring& s) {
+    std::wstring out;
+    out.reserve(s.size() + 8);
+    for (size_t i = 0; i < s.size();) {
+        if (s[i] >= L'0' && s[i] <= L'9') {
+            while (i < s.size() && ((s[i] >= L'0' && s[i] <= L'9') || s[i] == L',' || s[i] == L'.')) ++i;
+            out += L"888,8";
+        } else {
+            out += s[i++];
+        }
+    }
+    return out;
 }
 
 D2D1_COLOR_F WithAlpha(D2D1_COLOR_F c, float a) {
@@ -161,18 +179,26 @@ SIZE Card::Measure(UINT dpi, const CardModel& model, int maxHeightPx, int maxWid
     float needed = width(model.title, kHeaderSize, DWRITE_FONT_WEIGHT_SEMI_BOLD) + kMinGap +
                    width(model.window, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
     for (const CardRow& row : model.rows) {
-        if (row.half) {  // two per line: each half needs its title and value side by side
-            const float half = 2.0f * kRowPad + kIndent + width(row.title, kTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD) +
-                               kMinGap + width(row.value, kHalfValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-            needed = std::max(needed, 2.0f * half + kHalfGap);
+        if (row.half) {  // two per line: each half needs its title and value side by side, and each detail line
+            float half = kIndent + width(row.title, kTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD) + kMinGap +
+                         width(Stable(row.value), kHalfValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+            const std::wstring details = Stable(row.peak.empty() ? row.subtitle : row.subtitle + L"\u2003" + row.peak);
+            for (size_t start = 0; start <= details.size();) {
+                size_t end = details.find(L'\n', start);
+                if (end == std::wstring::npos) end = details.size();
+                half = std::max(
+                    half, kIndent + width(details.substr(start, end - start), kSmallSize, DWRITE_FONT_WEIGHT_NORMAL));
+                start = end + 1;
+            }
+            needed = std::max(needed, 2.0f * (half + 2.0f * kRowPad) + kHalfGap);
             continue;
         }
         needed =
             std::max(needed, 2.0f * kRowPad + kIndent + width(row.title, kTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD) +
-                                 kMinGap + width(row.value, kValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD));
-        needed =
-            std::max(needed, 2.0f * kRowPad + kIndent + width(row.subtitle, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL) +
-                                 kSubToPeak + width(row.peak, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL));
+                                 kMinGap + width(Stable(row.value), kValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD));
+        needed = std::max(needed, 2.0f * kRowPad + kIndent +
+                                      width(Stable(row.subtitle), kSmallSize, DWRITE_FONT_WEIGHT_NORMAL) + kSubToPeak +
+                                      width(Stable(row.peak), kSmallSize, DWRITE_FONT_WEIGHT_NORMAL));
     }
     const float footerLeft = width(model.footerLeft, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
     const float footerRight = width(model.footerRight, kSmallSize,
@@ -225,11 +251,13 @@ SIZE Card::Measure(UINT dpi, const CardModel& model, int maxHeightPx, int maxWid
                     box.subWidth = box.w - kIndent;
                 } else {
                     box.subtitle = row.subtitle;
-                    const float peak = row.peak.empty() ? 0.0f : width(row.peak, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
+                    const float peak =
+                        row.peak.empty() ? 0.0f : width(Stable(row.peak), kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
                     box.subWidth = box.w - kIndent - (peak > 0.0f ? peak + kSubToPeak : 0.0f);
                 }
+                // Heights from the widest form of the text too: a reading never adds or removes a line.
                 float extra = 0.0f;
-                Wrapped(box.subtitle, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL, box.subWidth, &extra);
+                Wrapped(Stable(box.subtitle), kSmallSize, DWRITE_FONT_WEIGHT_NORMAL, box.subWidth, &extra);
                 line.extra = std::max(line.extra, extra);
                 boxes_.push_back(std::move(box));
             }
@@ -257,7 +285,7 @@ SIZE Card::Measure(UINT dpi, const CardModel& model, int maxHeightPx, int maxWid
 
     // Natural size first. On a short screen: wider (less wrapping, three tiles per row), then shorter
     // graphs, then tighter rows. The text itself is never shrunk or cut.
-    const float natural = std::clamp(std::ceil(needed + 2.0f * kPad), kMinWidth, kMaxWidth);
+    const float natural = std::max(std::clamp(std::ceil(needed + 2.0f * kPad), kMinWidth, kMaxWidth), minWidth_);
     const float maxHeight = maxHeightPx > 0 ? static_cast<float>(maxHeightPx) / scale_ : 0.0f;
     height_ = layoutAt(natural, kSparkHeight, kRowGap);
     if (maxHeight > 0.0f && height_ > maxHeight) {
@@ -286,6 +314,7 @@ SIZE Card::Measure(UINT dpi, const CardModel& model, int maxHeightPx, int maxWid
         // Last resort (extreme setups on small screens): the whole card is drawn slightly smaller.
         if (height_ > maxHeight) scale_ *= maxHeight / height_;
     }
+    minWidth_ = std::max(minWidth_, width_);  // never narrower while shown
     size_ = {static_cast<LONG>(std::ceil((width_ + 2 * kShadow) * scale_)),
              static_cast<LONG>(std::ceil((height_ + 2 * kShadow) * scale_))};
     return size_;
@@ -471,37 +500,138 @@ void Card::DrawSensorTile(const CardSensorLine& tile, const D2D1_RECT_F& area) {
     DrawText(title.Get(), left + 11.0f, base, medium);
     DrawTextRight(value.Get(), right, base, tile.level > 0 && !theme_.highContrast ? hot : strong);
 
-    // Thermometer: a bulb on the left and a tube that fills up with the temperature, in its color.
     const float gaugeTop = Snap(base + kTileToGauge);
-    const float gh = kGaugeHeight;  // the bulb's diameter
-    if (tile.gauge >= 0.0f) {
-        const D2D1_COLOR_F fillColor = tile.level > 0 ? hot : accent;
-        const float bulbR = gh / 2.0f;
-        const float cy = gaugeTop + bulbR;
-        const float wall = std::max(1.5f, 2.0f / scale_);  // glass thickness around the liquid
-        const float glassR = gh * 0.27f;                   // half the tube's outer height
-        const float tubeLeft = left + bulbR;               // the tube starts inside the bulb
-        // Glass: the tube (rounded at the top end) and the bulb, in the track color.
-        brush_->SetColor(Ink(theme_, light ? 0.11f : 0.14f));
-        target_->FillRoundedRectangle(
-            D2D1::RoundedRect(D2D1::RectF(tubeLeft, cy - glassR, right, cy + glassR), glassR, glassR), brush_.Get());
-        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(left + bulbR, cy), bulbR, bulbR), brush_.Get());
-        // Liquid inside the glass: the bulb is always full, the column rises with the temperature.
-        brush_->SetColor(fillColor);
-        const float liquidR = std::max(glassR - wall, 1.0f / scale_);
-        const float top = tubeLeft + (right - wall - tubeLeft) * std::clamp(tile.gauge, 0.0f, 1.0f);
-        target_->FillRoundedRectangle(
-            D2D1::RoundedRect(
-                D2D1::RectF(tubeLeft, cy - liquidR, std::max(top, tubeLeft + 2.0f * liquidR), cy + liquidR), liquidR,
-                liquidR),
-            brush_.Get());
-        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(left + bulbR, cy), bulbR - wall, bulbR - wall), brush_.Get());
-    }
+    const float gh = kGaugeHeight;
+    if (tile.gauge >= 0.0f) DrawThermometer(tile, left, right, gaugeTop);
 
     // Detail: the fans of this device, or its model.
     if (!tile.detail.empty()) {
         auto detail = Wrapped(tile.detail, kTileDetailSize, DWRITE_FONT_WEIGHT_NORMAL, TileDetailWidth());
         DrawText(detail.Get(), left, gaugeTop + gh + kGaugeToDetail + kTileDetailSize * kCap, faint);
+    }
+}
+
+namespace {
+
+D2D1_COLOR_F Mix(const D2D1_COLOR_F& a, const D2D1_COLOR_F& b, float t) {
+    t = std::clamp(t, 0.0f, 1.0f);
+    return D2D1::ColorF(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t);
+}
+
+}  // namespace
+
+// A small, realistic thermometer: a snowflake on the cold end, a flame on the hot end, a glass tube with
+// scale marks every 10 °C (the warm and hot thresholds highlighted), and a liquid column whose color goes
+// from icy blue through green and amber to red along the scale. The bulb holds the current color.
+void Card::DrawThermometer(const CardSensorLine& tile, float left, float right, float top) {
+    const bool light = theme_.light;
+    const float bulbR = kBulbSize / 2.0f;
+    const float cy = top + bulbR;
+
+    // Ends: color emoji (Segoe UI Emoji), vertically centered on the tube.
+    auto emoji = [&](const wchar_t* glyph, float x, bool alignRight) {
+        if (!emojiFormat_ && FAILED(gfx_.dwrite()->CreateTextFormat(
+                                 L"Segoe UI Emoji", nullptr, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+                                 DWRITE_FONT_STRETCH_NORMAL, kEmojiSize, L"en-us", &emojiFormat_))) {
+            return 0.0f;
+        }
+        ComPtr<IDWriteTextLayout> layout;
+        const UINT32 length = static_cast<UINT32>(wcslen(glyph));
+        if (FAILED(gfx_.dwrite()->CreateTextLayout(glyph, length, emojiFormat_.Get(), 100.0f, 100.0f, &layout))) {
+            return 0.0f;
+        }
+        DWRITE_TEXT_METRICS m{};
+        layout->GetMetrics(&m);
+        brush_->SetColor(Ink(theme_, 0.6f));  // only used where color fonts are not available
+        const float px = alignRight ? x - m.widthIncludingTrailingWhitespace : x;
+        target_->DrawTextLayout(D2D1::Point2F(Snap(px), Snap(cy - m.height / 2.0f)), layout.Get(), brush_.Get(),
+                                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT);
+        return m.widthIncludingTrailingWhitespace;
+    };
+    const float coldWidth = emoji(L"\u2744\uFE0F", left, false);
+    const float hotWidth = emoji(L"\U0001F525", right, true);
+
+    const float bulbX = left + coldWidth + 4.0f + bulbR;
+    const float tubeLeft = bulbX;  // the tube starts inside the bulb
+    const float tubeRight = right - hotWidth - 5.0f;
+    if (tubeRight - tubeLeft < 10.0f) return;
+    const float wall = std::max(1.4f, 2.0f / scale_);  // glass thickness around the liquid
+    const float glassR = 3.4f;                         // half the tube's outer height
+    const float liquidR = std::max(glassR - wall, 1.0f / scale_);
+    auto at = [&](float gauge) { return tubeLeft + (tubeRight - wall - tubeLeft) * std::clamp(gauge, 0.0f, 1.0f); };
+
+    // Scale: icy blue -> green -> amber at the warm mark -> red at the hot mark.
+    const D2D1_COLOR_F cold = Rgb(light ? 0x2563EB : 0x60A5FA);
+    const D2D1_COLOR_F fine = Rgb(light ? 0x16A34A : 0x4ADE80);
+    const D2D1_COLOR_F warm = Rgb(light ? 0xB35C00 : 0xFFB340);
+    const D2D1_COLOR_F hot = Rgb(light ? 0xC42B1C : 0xFF6B6B);
+    const float warmAt = std::clamp(tile.warmAt, 0.05f, 0.98f);
+    const float hotAt = std::clamp(tile.hotAt, warmAt + 0.01f, 0.99f);
+    const float fineAt = warmAt * 0.45f;
+    auto colorAt = [&](float g) {
+        if (theme_.highContrast) return FromColorRef(theme_.hcHighlight);
+        if (g <= fineAt) return Mix(cold, fine, g / fineAt);
+        if (g <= warmAt) return Mix(fine, warm, (g - fineAt) / (warmAt - fineAt));
+        if (g <= hotAt) return Mix(warm, hot, (g - warmAt) / (hotAt - warmAt));
+        return hot;
+    };
+    const float level = std::clamp(tile.gauge, 0.0f, 1.0f);
+    const D2D1_COLOR_F current = colorAt(level);
+
+    // Glass: tube and bulb, with a faint rim.
+    const D2D1_COLOR_F glass = Ink(theme_, light ? 0.10f : 0.13f);
+    brush_->SetColor(glass);
+    target_->FillRoundedRectangle(
+        D2D1::RoundedRect(D2D1::RectF(tubeLeft, cy - glassR, tubeRight, cy + glassR), glassR, glassR), brush_.Get());
+    target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(bulbX, cy), bulbR, bulbR), brush_.Get());
+
+    // Liquid column with the scale's gradient (so its tip shows the current color), and the bulb.
+    const D2D1_GRADIENT_STOP stops[] = {{0.0f, colorAt(0.0f)},
+                                        {fineAt, colorAt(fineAt)},
+                                        {warmAt, colorAt(warmAt)},
+                                        {hotAt, colorAt(hotAt)},
+                                        {1.0f, colorAt(1.0f)}};
+    ComPtr<ID2D1GradientStopCollection> collection;
+    ComPtr<ID2D1LinearGradientBrush> gradient;
+    const float tip = std::max(at(level), tubeLeft + 2.0f * liquidR);
+    const D2D1_ROUNDED_RECT column =
+        D2D1::RoundedRect(D2D1::RectF(tubeLeft, cy - liquidR, tip, cy + liquidR), liquidR, liquidR);
+    if (SUCCEEDED(target_->CreateGradientStopCollection(stops, 5, &collection)) &&
+        SUCCEEDED(target_->CreateLinearGradientBrush(
+            D2D1::LinearGradientBrushProperties(D2D1::Point2F(at(0.0f), cy), D2D1::Point2F(at(1.0f), cy)),
+            collection.Get(), &gradient))) {
+        target_->FillRoundedRectangle(column, gradient.Get());
+    } else {
+        brush_->SetColor(current);
+        target_->FillRoundedRectangle(column, brush_.Get());
+    }
+    brush_->SetColor(current);
+    target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(bulbX, cy), bulbR - wall, bulbR - wall), brush_.Get());
+
+    // Glass reflections: a thin line along the tube and a spot on the bulb.
+    if (!theme_.highContrast) {
+        brush_->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, light ? 0.55f : 0.22f));
+        target_->DrawLine(D2D1::Point2F(tubeLeft + bulbR, cy - glassR + wall * 0.55f),
+                          D2D1::Point2F(tubeRight - glassR, cy - glassR + wall * 0.55f), brush_.Get(), 0.8f / scale_);
+        brush_->SetColor(D2D1::ColorF(1.0f, 1.0f, 1.0f, 0.45f));
+        target_->FillEllipse(
+            D2D1::Ellipse(D2D1::Point2F(bulbX - bulbR * 0.32f, cy - bulbR * 0.32f), bulbR * 0.22f, bulbR * 0.22f),
+            brush_.Get());
+    }
+
+    // Scale marks under the tube: every 10 °C, the warm and hot thresholds longer and in their colors.
+    const float markTop = cy + glassR + 1.0f;
+    const float step = tile.tickStep > 0.02f ? tile.tickStep : 0.125f;
+    brush_->SetColor(Ink(theme_, light ? 0.28f : 0.30f));
+    for (float g = step; g < 0.999f; g += step) {
+        if (std::fabs(g - warmAt) < step * 0.3f || std::fabs(g - hotAt) < step * 0.3f) continue;
+        const float x = Snap(at(g)) + 0.5f / scale_;
+        target_->DrawLine(D2D1::Point2F(x, markTop), D2D1::Point2F(x, markTop + 2.0f), brush_.Get(), 1.0f / scale_);
+    }
+    for (const auto& [g, color] : {std::pair{warmAt, warm}, std::pair{hotAt, hot}}) {
+        const float x = Snap(at(g)) + 0.5f / scale_;
+        brush_->SetColor(theme_.highContrast ? FromColorRef(theme_.hcText) : color);
+        target_->DrawLine(D2D1::Point2F(x, markTop), D2D1::Point2F(x, markTop + 3.0f), brush_.Get(), 1.2f / scale_);
     }
 }
 

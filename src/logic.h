@@ -101,6 +101,9 @@ std::wstring WithFanRole(const std::wstring& text, const std::wstring& name, Fan
 // The correction for `name`, or `detected` when there is none.
 FanRole EffectiveFanRole(const std::wstring& text, const std::wstring& name, FanRole detected);
 
+// Temperatures at which a device turns amber (warm) and red (hot), °C.
+double WarmTemperature(MetricId id);
+double HotTemperature(MetricId id);
 // Fill of the card's temperature gauge, 0..1: 20 °C empty, full at 100 °C (processors) or 80 °C (drives).
 float TemperatureGauge(MetricId id, double celsius);
 

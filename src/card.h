@@ -31,6 +31,9 @@ struct CardSensorLine {
     int level = 0;                // 0 normal, 1 warm, 2 hot
     MetricId id = MetricId::Cpu;  // palette of the marker and the gauge
     bool fan = false;             // fan-only tile: neutral marker
+    float warmAt = 0.8f;          // gauge positions where the device turns warm / hot (thermometer marks)
+    float hotAt = 0.92f;
+    float tickStep = 0.125f;  // gauge distance between the scale's marks (10 °C)
 };
 
 struct CardModel {
@@ -58,6 +61,8 @@ public:
     // long texts wrap; when the visible card would be taller than `maxHeightPx` (> 0, shadow not included),
     // the graphs get shorter to fit.
     SIZE Measure(UINT dpi, const CardModel& model, int maxHeightPx = 0, int maxWidthPx = 0);
+    // While the card is shown its width only grows (live values never make it jump); forget it when hidden.
+    void ForgetWidth() { minWidth_ = 0.0f; }
     float SparkHeightDip() const { return sparkHeight_; }
     int ShadowMarginPx() const;
     float WidthDip() const { return width_; }
@@ -76,6 +81,7 @@ private:
                        const D2D1_COLOR_F* iconColor = nullptr);
     void DrawSparkline(const CardRow& row, int capacity, const D2D1_RECT_F& area);
     void DrawSensorTile(const CardSensorLine& tile, const D2D1_RECT_F& area);
+    void DrawThermometer(const CardSensorLine& tile, float left, float right, float top);
     // Text that never gets an ellipsis: it wraps within `maxWidth`; `extra` = height beyond one line.
     ComPtr<IDWriteTextLayout> Wrapped(const std::wstring& text, float size, DWRITE_FONT_WEIGHT weight, float maxWidth,
                                       float* extra = nullptr);
@@ -89,11 +95,13 @@ private:
     ComPtr<ID2D1SolidColorBrush> iconBrush_;  // drawing effect of inline icons (see icons.h)
     ComPtr<ID2D1StrokeStyle> roundStroke_;
     std::map<std::pair<int, int>, ComPtr<IDWriteTextFormat>> formats_;  // (size x 10, weight) -> format
+    ComPtr<IDWriteTextFormat> emojiFormat_;                             // Segoe UI Emoji (thermometer ends)
     Surface surface_;
     Theme theme_{};
     float scale_ = 1.0f;
-    float width_ = 0.0f;   // DIPs, without the margin
-    float height_ = 0.0f;  // DIPs, without the margin
+    float width_ = 0.0f;     // DIPs, without the margin
+    float minWidth_ = 0.0f;  // widest width since the card was shown
+    float height_ = 0.0f;    // DIPs, without the margin
     // Graph rows laid out by Measure(): a line holds one full row or two half rows.
     struct RowBox {
         size_t row = 0;
