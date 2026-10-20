@@ -1,5 +1,7 @@
 #include "gfx.h"
 
+#include <vector>
+
 bool Gfx::Init() {
     D2D1_FACTORY_OPTIONS options{};
     if (FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory), &options,
@@ -117,10 +119,13 @@ ComPtr<ID2D1DCRenderTarget> CreateDcTarget(ID2D1Factory* factory) {
 }
 
 float TextBaseline(IDWriteTextLayout* layout) {
+    // Baseline of the first line (wrapped layouts have several: ask for all of them).
     DWRITE_LINE_METRICS line{};
     UINT32 lines = 0;
-    layout->GetLineMetrics(&line, 1, &lines);
-    return line.baseline;
+    if (SUCCEEDED(layout->GetLineMetrics(&line, 1, &lines))) return line.baseline;
+    std::vector<DWRITE_LINE_METRICS> all(lines);
+    if (lines == 0 || FAILED(layout->GetLineMetrics(all.data(), lines, &lines))) return 0.0f;
+    return all[0].baseline;
 }
 
 float TextWidth(IDWriteTextLayout* layout) {

@@ -66,6 +66,12 @@ private:
     void DrawTextRight(IDWriteTextLayout* layout, float right, float baseline, const D2D1_COLOR_F& color);
     void DrawSparkline(const CardRow& row, int capacity, const D2D1_RECT_F& area);
     void DrawSensorTile(const CardSensorLine& tile, const D2D1_RECT_F& area);
+    // Text that never gets an ellipsis: it wraps within `maxWidth`; `extra` = height beyond one line.
+    ComPtr<IDWriteTextLayout> Wrapped(const std::wstring& text, float size, DWRITE_FONT_WEIGHT weight, float maxWidth,
+                                      float* extra = nullptr);
+    float SubtitleWidth(const CardRow& row);  // room for a row's subtitle at the current width
+    float TileWidth() const;
+    float TileDetailWidth() const;
     float Snap(float dip) const;
 
     const Gfx& gfx_;
@@ -76,7 +82,9 @@ private:
     Surface surface_;
     Theme theme_{};
     float scale_ = 1.0f;
-    float width_ = 0.0f;   // DIPs, without the margin
-    float height_ = 0.0f;  // DIPs, without the margin
+    float width_ = 0.0f;            // DIPs, without the margin
+    float height_ = 0.0f;           // DIPs, without the margin
+    std::vector<float> rowExtra_;   // per graph row: subtitle lines beyond the first
+    std::vector<float> tileExtra_;  // per tile row: detail lines beyond the first
     SIZE size_{0, 0};
 };

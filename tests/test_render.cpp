@@ -410,3 +410,28 @@ TEST(Layout_per_disk_columns_and_fahrenheit_badges_fit) {
         SavePreview(r.surface(), L"bar-disks-fahrenheit-" + std::to_wstring(dpi * 100 / 96), 0x101010);
     }
 }
+
+TEST(Card_never_cuts_text_it_widens_then_wraps) {
+    // Regression: "TGT-SLST-120 · Leitura 0,0 MB/s · Gravação 0,..." was cut with an ellipsis.
+    using i18n::Str;
+    const auto lang = i18n::Lang::Portuguese;
+    CardModel model = DemoCard(lang);
+    const std::wstring mbps = i18n::Get(lang, Str::UnitMBps);
+    model.rows.back().title = L"SSD (D:)";
+    model.rows.back().subtitle =
+        L"TGT-SLST-120 · " + text::Format(i18n::Get(lang, Str::CardDiskIo), {L"0,0 " + mbps, L"0,0 " + mbps});
+    Card card(SharedGfx());
+    card.SetTheme(MakeTheme(false));
+    const SIZE fits = card.Measure(96, model);
+    const float widthWhenItFits = card.WidthDip();
+
+    // Something too long for any width: the card stops at its maximum width and grows taller instead.
+    model.rows.back().subtitle =
+        model.rows.back().subtitle + L" · " + model.rows.back().subtitle + L" · " + model.rows.back().subtitle;
+    model.sensors[2].detail = L"Samsung SSD 990 PRO with Heatsink 4TB NVMe M.2 PCIe 4.0 (firmware 4B2QJXD7)";
+    const SIZE wraps = card.Measure(96, model);
+    CHECK(card.WidthDip() >= widthWhenItFits);
+    CHECK(wraps.cy > fits.cy);
+    CHECK(card.Paint(model));
+    SavePreview(card.surface(), L"card-long-texts", 0x2B2F36);
+}

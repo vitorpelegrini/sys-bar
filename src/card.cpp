@@ -7,8 +7,8 @@ namespace {
 
 // Measurements in DIPs.
 constexpr float kMinWidth = 316.0f;
-constexpr float kMaxWidth = 460.0f;
-constexpr float kShadow = 18.0f;  // transparent margin around the card for the shadow
+constexpr float kMaxWidth = 540.0f;  // beyond this, long texts wrap (the card grows taller)
+constexpr float kShadow = 18.0f;     // transparent margin around the card for the shadow
 constexpr float kPad = 16.0f;
 constexpr float kRadius = 8.0f;
 constexpr float kCap = 0.70f;
@@ -26,8 +26,9 @@ constexpr float kSparkRadius = 4.0f;
 constexpr float kRowGap = 17.0f;
 constexpr float kFooterGap = 14.0f;
 constexpr float kSepToHint = 13.0f;
-constexpr float kIndent = 15.0f;  // text indent next to the colored marker
-constexpr float kMinGap = 20.0f;  // minimum space between left and right aligned texts
+constexpr float kIndent = 15.0f;     // text indent next to the colored marker
+constexpr float kMinGap = 20.0f;     // minimum space between left and right aligned texts
+constexpr float kSubToPeak = 10.0f;  // subtitle -> peak, on the same line
 constexpr int kShadowSteps = 14;
 constexpr float kSectionGap = 18.0f;       // last graph -> "Sensors" title
 constexpr float kSectionTitleGap = 10.0f;  // title baseline -> first tile
@@ -134,15 +135,18 @@ SIZE Card::Measure(UINT dpi, const CardModel& model) {
     for (const CardRow& row : model.rows) {
         needed = std::max(needed, kIndent + width(row.title, kTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD) + kMinGap +
                                       width(row.value, kValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD));
+        needed = std::max(needed, kIndent + width(row.subtitle, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL) + kSubToPeak +
+                                      width(row.peak, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL));
     }
     const float hintLeft = width(model.hintLeft, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
     const float hintRight = width(model.hintRight, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
     needed = std::max(needed, hintLeft + hintRight + (hintLeft > 0 && hintRight > 0 ? kMinGap : 0.0f));
     for (const CardSensorLine& tile : model.sensors) {
-        // Titles are ellipsized, so only the value and a short part of the title must fit in a tile.
-        const float tileWidth = 2.0f * kTilePad + 10.0f +
-                                std::min(width(tile.title, kTileTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD), 80.0f) +
-                                12.0f + width(tile.value, kTileValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+        // Everything at full length: the card widens for it, and wraps the detail beyond the maximum width.
+        const float tileWidth =
+            2.0f * kTilePad + std::max(11.0f + width(tile.title, kTileTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD) + 12.0f +
+                                           width(tile.value, kTileValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD),
+                                       width(tile.detail, kTileDetailSize, DWRITE_FONT_WEIGHT_NORMAL));
         needed = std::max(needed, kTileColumns * tileWidth + (kTileColumns - 1) * kTileGap);
     }
     needed = std::max(needed, width(model.sensorsHint, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL));
@@ -150,9 +154,54 @@ SIZE Card::Measure(UINT dpi, const CardModel& model) {
 
     width_ = std::clamp(std::ceil(needed + 2.0f * kPad), kMinWidth, kMaxWidth);
     height_ = TotalHeight(model.rows.size()) + ExtraHeight(model);
+
+    // What still does not fit wraps onto more lines, and the card grows taller instead.
+    rowExtra_.assign(model.rows.size(), 0.0f);
+    for (size_t i = 0; i < model.rows.size(); ++i) {
+        Wrapped(model.rows[i].subtitle, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL, SubtitleWidth(model.rows[i]),
+                &rowExtra_[i]);
+        height_ += rowExtra_[i];
+    }
+    tileExtra_.assign(TileRows(model.sensors.size()), 0.0f);
+    for (size_t i = 0; i < model.sensors.size(); ++i) {
+        float extra = 0.0f;
+        Wrapped(model.sensors[i].detail, kTileDetailSize, DWRITE_FONT_WEIGHT_NORMAL, TileDetailWidth(), &extra);
+        float& row = tileExtra_[i / kTileColumns];
+        row = std::max(row, extra);
+    }
+    for (float extra : tileExtra_) height_ += extra;
     size_ = {static_cast<LONG>(std::ceil((width_ + 2 * kShadow) * scale_)),
              static_cast<LONG>(std::ceil((height_ + 2 * kShadow) * scale_))};
     return size_;
+}
+
+ComPtr<IDWriteTextLayout> Card::Wrapped(const std::wstring& text, float size, DWRITE_FONT_WEIGHT weight, float maxWidth,
+                                        float* extra) {
+    if (extra) *extra = 0.0f;
+    if (text.empty()) return nullptr;
+    auto layout = Text(text, size, weight);
+    if (!layout) return nullptr;
+    layout->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+    layout->SetMaxWidth(std::max(maxWidth, 20.0f));
+    DWRITE_TEXT_METRICS metrics{};
+    if (extra && SUCCEEDED(layout->GetMetrics(&metrics)) && metrics.lineCount > 1) {
+        *extra = metrics.height - metrics.height / static_cast<float>(metrics.lineCount);
+    }
+    return layout;
+}
+
+float Card::SubtitleWidth(const CardRow& row) {
+    auto peak = Text(row.peak, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
+    const float peakWidth = peak && !row.peak.empty() ? TextWidth(peak.Get()) + kSubToPeak : 0.0f;
+    return width_ - 2.0f * kPad - kIndent - peakWidth;
+}
+
+float Card::TileWidth() const {
+    return (width_ - 2.0f * kPad - (kTileColumns - 1) * kTileGap) / kTileColumns;
+}
+
+float Card::TileDetailWidth() const {
+    return TileWidth() - 2.0f * kTilePad;
 }
 
 bool Card::EnsureTarget() {
@@ -295,23 +344,12 @@ void Card::DrawSensorTile(const CardSensorLine& tile, const D2D1_RECT_F& area) {
     const float right = area.right - kTilePad;
     const float base = area.top + kTilePad + kTileValueSize * kCap;
 
-    auto ellipsize = [&](IDWriteTextLayout* layout, float maxWidth) {
-        if (!layout) return;
-        layout->SetMaxWidth(std::max(maxWidth, 12.0f));
-        ComPtr<IDWriteInlineObject> ellipsis;
-        gfx_.dwrite()->CreateEllipsisTrimmingSign(layout, &ellipsis);
-        DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
-        layout->SetTrimming(&trimming, ellipsis.Get());
-    };
-
     // Marker dot, title and value (the value turns amber/red when the device runs warm/hot).
     brush_->SetColor(tile.level > 0 ? hot : accent);
     target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(left + 3.0f, base - kTileTitleSize * kCap / 2.0f), 3.0f, 3.0f),
                          brush_.Get());
     auto value = Text(tile.value, kTileValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-    const float valueWidth = value ? TextWidth(value.Get()) : 0.0f;
-    auto title = Text(tile.title, kTileTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD);
-    ellipsize(title.Get(), right - (left + 11.0f) - valueWidth - 8.0f);
+    auto title = Text(tile.title, kTileTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD);  // Measure() made room for it
     DrawText(title.Get(), left + 11.0f, base, medium);
     DrawTextRight(value.Get(), right, base, tile.level > 0 && !theme_.highContrast ? hot : strong);
 
@@ -331,8 +369,7 @@ void Card::DrawSensorTile(const CardSensorLine& tile, const D2D1_RECT_F& area) {
 
     // Detail: the fans of this device, or its model.
     if (!tile.detail.empty()) {
-        auto detail = Text(tile.detail, kTileDetailSize, DWRITE_FONT_WEIGHT_NORMAL);
-        ellipsize(detail.Get(), right - left);
+        auto detail = Wrapped(tile.detail, kTileDetailSize, DWRITE_FONT_WEIGHT_NORMAL, TileDetailWidth());
         DrawText(detail.Get(), left, gaugeTop + gh + kGaugeToDetail + kTileDetailSize * kCap, faint);
     }
 }
@@ -386,14 +423,16 @@ bool Card::Paint(const CardModel& model) {
     DrawTextRight(Text(model.window, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL).Get(), right, headerBase, faint);
     y = headerBase + kHeaderToRow;
 
-    for (const CardRow& row : model.rows) {
+    for (size_t rowIndex = 0; rowIndex < model.rows.size(); ++rowIndex) {
+        const CardRow& row = model.rows[rowIndex];
+        const float extra = rowIndex < rowExtra_.size() ? rowExtra_[rowIndex] : 0.0f;
         // Marker and value use the color of the current load, exactly like the strip.
         const D2D1_COLOR_F accent = MetricColor(row.id, row.load, theme_);
         const bool hot = theme_.colorByLoad && row.load >= kWarnLoad;
         const D2D1_COLOR_F valueColor = hot && !theme_.highContrast ? accent : strong;
         const float valueBase = y + kValueSize * kCap;
         const float subBase = valueBase + kValueToSub;
-        const float sparkTop = subBase + kSubToSpark;
+        const float sparkTop = subBase + extra + kSubToSpark;
 
         brush_->SetColor(accent);
         const float dotY = valueBase - kTitleSize * kCap / 2.0f;
@@ -401,17 +440,9 @@ bool Card::Paint(const CardModel& model) {
         DrawText(Text(row.title, kTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD).Get(), left + kIndent, valueBase, strong);
         DrawTextRight(Text(row.value, kValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD).Get(), right, valueBase, valueColor);
 
-        // Subtitle (ellipsized if it would touch the peak) + peak on the right.
+        // Subtitle (wrapped, never cut, when it would touch the peak) + peak on the right of its first line.
         auto peak = Text(row.peak, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
-        const float peakWidth = peak ? TextWidth(peak.Get()) : 0.0f;
-        auto sub = Text(row.subtitle, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
-        if (sub) {
-            sub->SetMaxWidth(std::max(right - (left + kIndent) - peakWidth - 10.0f, 20.0f));
-            ComPtr<IDWriteInlineObject> ellipsis;
-            gfx_.dwrite()->CreateEllipsisTrimmingSign(sub.Get(), &ellipsis);
-            DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
-            sub->SetTrimming(&trimming, ellipsis.Get());
-        }
+        auto sub = Wrapped(row.subtitle, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL, SubtitleWidth(row));
         DrawText(sub.Get(), left + kIndent, subBase, medium);
         DrawTextRight(peak.Get(), right, subBase, faint);
 
@@ -426,16 +457,18 @@ bool Card::Paint(const CardModel& model) {
         const float titleBase = y + kSmallSize * kCap;
         DrawText(Text(model.sensorsTitle, kSmallSize, DWRITE_FONT_WEIGHT_SEMI_BOLD).Get(), left, titleBase, medium);
         y = titleBase + kSectionTitleGap;
-        const float tileW = (right - left - (kTileColumns - 1) * kTileGap) / kTileColumns;
-        const float tileH = TileHeight();
-        for (size_t i = 0; i < model.sensors.size(); ++i) {
-            const CardSensorLine& tile = model.sensors[i];
-            const float x = left + static_cast<float>(i % kTileColumns) * (tileW + kTileGap);
-            const float top = y + static_cast<float>(i / kTileColumns) * (tileH + kTileGap);
-            DrawSensorTile(tile, D2D1::RectF(Snap(x), Snap(top), Snap(x + tileW), Snap(top + tileH)));
-        }
+        const float tileW = TileWidth();
         const size_t rows = TileRows(model.sensors.size());
-        if (rows) y += static_cast<float>(rows) * tileH + static_cast<float>(rows - 1) * kTileGap;
+        for (size_t r = 0; r < rows; ++r) {
+            const float tileH = TileHeight() + (r < tileExtra_.size() ? tileExtra_[r] : 0.0f);
+            for (size_t c = 0; c < static_cast<size_t>(kTileColumns); ++c) {
+                const size_t i = r * kTileColumns + c;
+                if (i >= model.sensors.size()) break;
+                const float x = left + static_cast<float>(c) * (tileW + kTileGap);
+                DrawSensorTile(model.sensors[i], D2D1::RectF(Snap(x), Snap(y), Snap(x + tileW), Snap(y + tileH)));
+            }
+            y += tileH + (r + 1 < rows ? kTileGap : 0.0f);
+        }
         if (!model.sensorsHint.empty()) {
             if (rows) y += 6.0f;
             DrawText(Text(model.sensorsHint, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL).Get(), left, y + kHintLine - 5.0f,
