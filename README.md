@@ -154,6 +154,8 @@ Every file has a `.sha256` checksum next to it.
 > say "Windows protected your PC" the first time. Click **More info → Run anyway**.
 
 **Requirements:** Windows 10 1809 or later, or Windows 11, on x64 or ARM64. The advanced sensors are x64 only.
+Nothing else to install: sys-bar needs no runtime, and the sensors service runs on .NET Framework 4.7.2, which is part
+of Windows since version 1809. The PawnIO driver ships inside the installer.
 
 ## Using it
 

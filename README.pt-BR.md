@@ -156,7 +156,8 @@ Cada arquivo tem um checksum `.sha256` ao lado.
 > **Mais informações → Executar assim mesmo**.
 
 **Requisitos:** Windows 10 1809 ou mais recente, ou Windows 11, em x64 ou ARM64. Os sensores avançados são só
-para x64.
+para x64. Não há nada mais para instalar: o sys-bar não usa runtime, e o serviço de sensores roda no .NET Framework
+4.7.2, que já faz parte do Windows desde a versão 1809. O driver PawnIO vem dentro do instalador.
 
 ## Como usar
 
