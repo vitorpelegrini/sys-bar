@@ -435,3 +435,41 @@ TEST(Card_never_cuts_text_it_widens_then_wraps) {
     CHECK(card.Paint(model));
     SavePreview(card.surface(), L"card-long-texts", 0x2B2F36);
 }
+
+TEST(Card_fits_short_screens_with_many_disks) {
+    // Worst case: 4 drives (side by side, two per line) plus every sensor, on a 1080p screen at 150% and a
+    // 1366x768 laptop. The visible card must never be taller than the work area.
+    using i18n::Str;
+    CardModel model = DemoCard(i18n::Lang::English);
+    model.rows.pop_back();  // the combined disk row becomes one row per drive
+    const wchar_t* names[] = {L"NVMe (C:)", L"SSD (D:)", L"HDD (E: F:)", L"USB (G:)"};
+    for (const wchar_t* name : names) {
+        CardRow r;
+        r.id = MetricId::Disk;
+        r.title = name;
+        r.value = L"7%";
+        r.subtitle = L"Samsung SSD 980 PRO 1TB · Read 12,4 MB/s · Write 0,8 MB/s";
+        r.peak = L"max. 64%";
+        r.half = true;
+        for (int i = 0; i < 60; ++i) r.history.push_back(0.1f + 0.05f * static_cast<float>(i % 7));
+        r.load = r.history.back();
+        model.rows.push_back(r);
+    }
+    model.sensors.push_back(model.sensors.back());
+    model.sensors.push_back(model.sensors.back());
+
+    struct Screen {
+        UINT dpi;
+        int workHeightPx;
+    };
+    for (const Screen screen : {Screen{144, 1032 - 30}, Screen{96, 728 - 20}, Screen{96, 1400}}) {
+        Card card(SharedGfx());
+        card.SetTheme(MakeTheme(false));
+        const SIZE size = card.Measure(screen.dpi, model, screen.workHeightPx);
+        const int visible = size.cy - 2 * card.ShadowMarginPx();
+        CHECK(visible <= screen.workHeightPx + 1);
+        CHECK(card.SparkHeightDip() >= 14.0f);
+        CHECK(card.Paint(model));
+        SavePreview(card.surface(), L"card-many-disks-" + std::to_wstring(screen.workHeightPx), 0x2B2F36);
+    }
+}

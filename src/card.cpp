@@ -23,7 +23,12 @@ constexpr float kValueToSub = 17.0f;
 constexpr float kSubToSpark = 9.0f;
 constexpr float kSparkHeight = 30.0f;
 constexpr float kSparkRadius = 4.0f;
+constexpr float kMinSparkHeight = 14.0f;  // graphs shrink down to this on short screens
+constexpr float kHalfGap = 14.0f;         // between the two half rows of a line
+constexpr float kHalfValueSize = 15.0f;
 constexpr float kRowGap = 17.0f;
+constexpr float kMinRowGap = 10.0f;
+constexpr float kWideWidth = 720.0f;  // short screens only: a wider card instead of a taller one
 constexpr float kFooterGap = 14.0f;
 constexpr float kSepToHint = 13.0f;
 constexpr float kIndent = 15.0f;     // text indent next to the colored marker
@@ -42,20 +47,15 @@ constexpr float kTileToGauge = 8.0f;  // value baseline -> gauge
 constexpr float kGaugeHeight = 3.0f;
 constexpr float kGaugeToDetail = 7.0f;  // gauge -> detail cap height
 constexpr float kHintLine = 18.0f;      // the faint line under the tiles
-constexpr int kTileColumns = 2;
 constexpr float kNoticeGap = 12.0f;
-
-float RowHeight() {
-    return kValueSize * kCap + kValueToSub + kSubToSpark + kSparkHeight;
-}
 
 float TileHeight() {
     return kTilePad + kTileValueSize * kCap + kTileToGauge + kGaugeHeight + kGaugeToDetail + kTileDetailSize * kCap +
            kTilePad;
 }
 
-size_t TileRows(size_t tiles) {
-    return (tiles + kTileColumns - 1) / kTileColumns;
+size_t TileRows(size_t tiles, int columns) {
+    return (tiles + static_cast<size_t>(columns) - 1) / static_cast<size_t>(columns);
 }
 
 bool HasSensors(const CardModel& m) {
@@ -63,10 +63,10 @@ bool HasSensors(const CardModel& m) {
 }
 
 // Height of the optional sections between the graphs and the footer (sensors, notice).
-float ExtraHeight(const CardModel& m) {
+float ExtraHeight(const CardModel& m, int tileColumns) {
     float h = 0.0f;
     if (HasSensors(m)) {
-        const size_t rows = TileRows(m.sensors.size());
+        const size_t rows = TileRows(m.sensors.size(), tileColumns);
         h += kSectionGap + kSmallSize * kCap + kSectionTitleGap;
         if (rows) h += static_cast<float>(rows) * TileHeight() + static_cast<float>(rows - 1) * kTileGap;
         if (!m.sensorsHint.empty()) h += (rows ? 6.0f : 0.0f) + kHintLine;
@@ -75,11 +75,16 @@ float ExtraHeight(const CardModel& m) {
     return h;
 }
 
-float TotalHeight(size_t rows) {
+// Header and footer (everything but the graph rows and the optional sections).
+float FrameHeight() {
     const float header = kHeaderSize * kCap + kHeaderToRow;
-    const float body = rows ? static_cast<float>(rows) * RowHeight() + static_cast<float>(rows - 1) * kRowGap : 0.0f;
     const float footer = kFooterGap + kSepToHint + kSmallSize * kCap + 4.0f;
-    return kPad + header + body + footer + kPad - 2.0f;
+    return kPad + header + footer + kPad - 2.0f;
+}
+
+// Text part of a graph line, above its sparkline.
+float LineTextHeight(bool half, float extra) {
+    return (half ? kHalfValueSize : kValueSize) * kCap + kValueToSub + extra + kSubToSpark;
 }
 
 D2D1_COLOR_F WithAlpha(D2D1_COLOR_F c, float a) {
@@ -121,7 +126,7 @@ ComPtr<IDWriteTextLayout> Card::Text(const std::wstring& text, float size, DWRIT
     return layout;
 }
 
-SIZE Card::Measure(UINT dpi, const CardModel& model) {
+SIZE Card::Measure(UINT dpi, const CardModel& model, int maxHeightPx) {
     scale_ = static_cast<float>(std::max<UINT>(dpi, 96)) / 96.0f;
 
     // Widest line decides the width (translations vary a lot in length).
@@ -133,6 +138,12 @@ SIZE Card::Measure(UINT dpi, const CardModel& model) {
     float needed = width(model.title, kHeaderSize, DWRITE_FONT_WEIGHT_SEMI_BOLD) + kMinGap +
                    width(model.window, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
     for (const CardRow& row : model.rows) {
+        if (row.half) {  // two per line: each half needs its title and value side by side
+            const float half = kIndent + width(row.title, kTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD) + kMinGap +
+                               width(row.value, kHalfValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+            needed = std::max(needed, 2.0f * half + kHalfGap);
+            continue;
+        }
         needed = std::max(needed, kIndent + width(row.title, kTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD) + kMinGap +
                                       width(row.value, kValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD));
         needed = std::max(needed, kIndent + width(row.subtitle, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL) + kSubToPeak +
@@ -141,35 +152,105 @@ SIZE Card::Measure(UINT dpi, const CardModel& model) {
     const float hintLeft = width(model.hintLeft, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
     const float hintRight = width(model.hintRight, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
     needed = std::max(needed, hintLeft + hintRight + (hintLeft > 0 && hintRight > 0 ? kMinGap : 0.0f));
+    float tileNeed = 0.0f;  // widest tile, everything at full length
     for (const CardSensorLine& tile : model.sensors) {
-        // Everything at full length: the card widens for it, and wraps the detail beyond the maximum width.
-        const float tileWidth =
-            2.0f * kTilePad + std::max(11.0f + width(tile.title, kTileTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD) + 12.0f +
-                                           width(tile.value, kTileValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD),
-                                       width(tile.detail, kTileDetailSize, DWRITE_FONT_WEIGHT_NORMAL));
-        needed = std::max(needed, kTileColumns * tileWidth + (kTileColumns - 1) * kTileGap);
+        tileNeed =
+            std::max(tileNeed, 2.0f * kTilePad +
+                                   std::max(11.0f + width(tile.title, kTileTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD) +
+                                                12.0f + width(tile.value, kTileValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD),
+                                            width(tile.detail, kTileDetailSize, DWRITE_FONT_WEIGHT_NORMAL)));
     }
+    if (tileNeed > 0.0f) needed = std::max(needed, 2.0f * tileNeed + kTileGap);
     needed = std::max(needed, width(model.sensorsHint, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL));
     needed = std::max(needed, width(model.notice, kSmallSize, DWRITE_FONT_WEIGHT_SEMI_BOLD));
 
-    width_ = std::clamp(std::ceil(needed + 2.0f * kPad), kMinWidth, kMaxWidth);
-    height_ = TotalHeight(model.rows.size()) + ExtraHeight(model);
+    // Lays everything out at a given width, graph height and row gap; returns the card height (DIPs).
+    auto layoutAt = [&](float cardWidth, float spark, float rowGap) {
+        width_ = cardWidth;
+        // A wide card fits three sensor tiles per row, when each still holds its widest content.
+        tileColumns_ = 2;
+        if (width_ >= kWideWidth - 1.0f && (width_ - 2.0f * kPad - 2.0f * kTileGap) / 3.0f >= tileNeed)
+            tileColumns_ = 3;
+        float height = FrameHeight() + ExtraHeight(model, tileColumns_);
 
-    // What still does not fit wraps onto more lines, and the card grows taller instead.
-    rowExtra_.assign(model.rows.size(), 0.0f);
-    for (size_t i = 0; i < model.rows.size(); ++i) {
-        Wrapped(model.rows[i].subtitle, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL, SubtitleWidth(model.rows[i]),
-                &rowExtra_[i]);
-        height_ += rowExtra_[i];
+        // Graph lines: a full row, or two half rows side by side. What still does not fit wraps onto
+        // more lines, and the card grows taller instead.
+        const float content = width_ - 2.0f * kPad;
+        const float halfWidth = (content - kHalfGap) / 2.0f;
+        boxes_.clear();
+        lines_.clear();
+        for (size_t i = 0; i < model.rows.size();) {
+            const bool pair = model.rows[i].half && i + 1 < model.rows.size() && model.rows[i + 1].half;
+            const bool half = model.rows[i].half;
+            RowLine line;
+            line.half = half;
+            for (size_t k = 0; k < (pair ? 2u : 1u); ++k) {
+                const CardRow& row = model.rows[i + k];
+                RowBox box;
+                box.row = i + k;
+                box.line = lines_.size();
+                box.x = k == 0 ? 0.0f : halfWidth + kHalfGap;
+                box.w = half ? halfWidth : content;
+                if (half) {
+                    box.subtitle = row.peak.empty()       ? row.subtitle
+                                   : row.subtitle.empty() ? row.peak
+                                                          : row.subtitle + L" \u00b7 " + row.peak;
+                    box.subWidth = box.w - kIndent;
+                } else {
+                    box.subtitle = row.subtitle;
+                    const float peak = row.peak.empty() ? 0.0f : width(row.peak, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
+                    box.subWidth = box.w - kIndent - (peak > 0.0f ? peak + kSubToPeak : 0.0f);
+                }
+                float extra = 0.0f;
+                Wrapped(box.subtitle, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL, box.subWidth, &extra);
+                line.extra = std::max(line.extra, extra);
+                boxes_.push_back(std::move(box));
+            }
+            lines_.push_back(line);
+            i += pair ? 2 : 1;
+        }
+        float y = 0.0f;
+        for (RowLine& line : lines_) {
+            line.y = y;
+            y += LineTextHeight(line.half, line.extra) + spark + rowGap;
+        }
+        height += lines_.empty() ? 0.0f : y - rowGap;
+        sparkHeight_ = spark;
+
+        tileExtra_.assign(TileRows(model.sensors.size(), tileColumns_), 0.0f);
+        for (size_t i = 0; i < model.sensors.size(); ++i) {
+            float extra = 0.0f;
+            Wrapped(model.sensors[i].detail, kTileDetailSize, DWRITE_FONT_WEIGHT_NORMAL, TileDetailWidth(), &extra);
+            float& row = tileExtra_[i / static_cast<size_t>(tileColumns_)];
+            row = std::max(row, extra);
+        }
+        for (float extra : tileExtra_) height += extra;
+        return height;
+    };
+
+    // Natural size first. On a short screen: wider (less wrapping, three tiles per row), then shorter
+    // graphs, then tighter rows. The text itself is never shrunk or cut.
+    const float natural = std::clamp(std::ceil(needed + 2.0f * kPad), kMinWidth, kMaxWidth);
+    const float maxHeight = maxHeightPx > 0 ? static_cast<float>(maxHeightPx) / scale_ : 0.0f;
+    height_ = layoutAt(natural, kSparkHeight, kRowGap);
+    if (maxHeight > 0.0f && height_ > maxHeight) {
+        for (float wider : {kMaxWidth, kWideWidth}) {
+            if (wider <= width_) continue;
+            height_ = layoutAt(wider, kSparkHeight, kRowGap);
+            if (height_ <= maxHeight) break;
+        }
+        if (height_ > maxHeight && !lines_.empty()) {
+            const float lines = static_cast<float>(lines_.size());
+            const float spark = std::max(kMinSparkHeight, kSparkHeight - (height_ - maxHeight) / lines);
+            height_ = layoutAt(width_, spark, kRowGap);
+            if (height_ > maxHeight) {
+                const float gap = std::max(kMinRowGap, kRowGap - (height_ - maxHeight) / std::max(lines - 1.0f, 1.0f));
+                height_ = layoutAt(width_, spark, gap);
+            }
+        }
+        // Last resort (extreme setups on small screens): the whole card is drawn slightly smaller.
+        if (height_ > maxHeight) scale_ *= maxHeight / height_;
     }
-    tileExtra_.assign(TileRows(model.sensors.size()), 0.0f);
-    for (size_t i = 0; i < model.sensors.size(); ++i) {
-        float extra = 0.0f;
-        Wrapped(model.sensors[i].detail, kTileDetailSize, DWRITE_FONT_WEIGHT_NORMAL, TileDetailWidth(), &extra);
-        float& row = tileExtra_[i / kTileColumns];
-        row = std::max(row, extra);
-    }
-    for (float extra : tileExtra_) height_ += extra;
     size_ = {static_cast<LONG>(std::ceil((width_ + 2 * kShadow) * scale_)),
              static_cast<LONG>(std::ceil((height_ + 2 * kShadow) * scale_))};
     return size_;
@@ -190,14 +271,9 @@ ComPtr<IDWriteTextLayout> Card::Wrapped(const std::wstring& text, float size, DW
     return layout;
 }
 
-float Card::SubtitleWidth(const CardRow& row) {
-    auto peak = Text(row.peak, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
-    const float peakWidth = peak && !row.peak.empty() ? TextWidth(peak.Get()) + kSubToPeak : 0.0f;
-    return width_ - 2.0f * kPad - kIndent - peakWidth;
-}
-
 float Card::TileWidth() const {
-    return (width_ - 2.0f * kPad - (kTileColumns - 1) * kTileGap) / kTileColumns;
+    const auto columns = static_cast<float>(tileColumns_);
+    return (width_ - 2.0f * kPad - (columns - 1.0f) * kTileGap) / columns;
 }
 
 float Card::TileDetailWidth() const {
@@ -423,33 +499,39 @@ bool Card::Paint(const CardModel& model) {
     DrawTextRight(Text(model.window, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL).Get(), right, headerBase, faint);
     y = headerBase + kHeaderToRow;
 
-    for (size_t rowIndex = 0; rowIndex < model.rows.size(); ++rowIndex) {
-        const CardRow& row = model.rows[rowIndex];
-        const float extra = rowIndex < rowExtra_.size() ? rowExtra_[rowIndex] : 0.0f;
+    const float rowsTop = y;
+    for (const RowBox& box : boxes_) {
+        if (box.row >= model.rows.size() || box.line >= lines_.size()) continue;
+        const CardRow& row = model.rows[box.row];
+        const RowLine& line = lines_[box.line];
+        const float x0 = left + box.x, x1 = x0 + box.w;
+        const float valueSize = line.half ? kHalfValueSize : kValueSize;
         // Marker and value use the color of the current load, exactly like the strip.
         const D2D1_COLOR_F accent = MetricColor(row.id, row.load, theme_);
         const bool hot = theme_.colorByLoad && row.load >= kWarnLoad;
         const D2D1_COLOR_F valueColor = hot && !theme_.highContrast ? accent : strong;
-        const float valueBase = y + kValueSize * kCap;
+        const float lineTop = rowsTop + line.y;
+        const float valueBase = lineTop + valueSize * kCap;
         const float subBase = valueBase + kValueToSub;
-        const float sparkTop = subBase + extra + kSubToSpark;
+        const float sparkTop = lineTop + LineTextHeight(line.half, line.extra);
 
         brush_->SetColor(accent);
         const float dotY = valueBase - kTitleSize * kCap / 2.0f;
-        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(left + 4.0f, dotY), 3.5f, 3.5f), brush_.Get());
-        DrawText(Text(row.title, kTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD).Get(), left + kIndent, valueBase, strong);
-        DrawTextRight(Text(row.value, kValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD).Get(), right, valueBase, valueColor);
+        target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(x0 + 4.0f, dotY), 3.5f, 3.5f), brush_.Get());
+        DrawText(Text(row.title, kTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD).Get(), x0 + kIndent, valueBase, strong);
+        DrawTextRight(Text(row.value, valueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD).Get(), x1, valueBase, valueColor);
 
-        // Subtitle (wrapped, never cut, when it would touch the peak) + peak on the right of its first line.
-        auto peak = Text(row.peak, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
-        auto sub = Wrapped(row.subtitle, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL, SubtitleWidth(row));
-        DrawText(sub.Get(), left + kIndent, subBase, medium);
-        DrawTextRight(peak.Get(), right, subBase, faint);
+        // Subtitle (wrapped, never cut); full rows show the peak on the right of its first line.
+        auto sub = Wrapped(box.subtitle, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL, box.subWidth);
+        DrawText(sub.Get(), x0 + kIndent, subBase, medium);
+        if (!line.half) DrawTextRight(Text(row.peak, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL).Get(), x1, subBase, faint);
 
-        DrawSparkline(row, model.capacity, D2D1::RectF(left, Snap(sparkTop), right, Snap(sparkTop + kSparkHeight)));
-        y = sparkTop + kSparkHeight + kRowGap;
+        DrawSparkline(row, model.capacity, D2D1::RectF(x0, Snap(sparkTop), x1, Snap(sparkTop + sparkHeight_)));
     }
-    if (!model.rows.empty()) y -= kRowGap;
+    if (!lines_.empty()) {
+        const RowLine& last = lines_.back();
+        y = rowsTop + last.y + LineTextHeight(last.half, last.extra) + sparkHeight_;
+    }
 
     // Sensors: a grid of tiles, one per device, with its fans (see CardSensorLine).
     if (HasSensors(model)) {
@@ -458,11 +540,12 @@ bool Card::Paint(const CardModel& model) {
         DrawText(Text(model.sensorsTitle, kSmallSize, DWRITE_FONT_WEIGHT_SEMI_BOLD).Get(), left, titleBase, medium);
         y = titleBase + kSectionTitleGap;
         const float tileW = TileWidth();
-        const size_t rows = TileRows(model.sensors.size());
+        const size_t rows = TileRows(model.sensors.size(), tileColumns_);
+        const auto columns = static_cast<size_t>(tileColumns_);
         for (size_t r = 0; r < rows; ++r) {
             const float tileH = TileHeight() + (r < tileExtra_.size() ? tileExtra_[r] : 0.0f);
-            for (size_t c = 0; c < static_cast<size_t>(kTileColumns); ++c) {
-                const size_t i = r * kTileColumns + c;
+            for (size_t c = 0; c < columns; ++c) {
+                const size_t i = r * columns + c;
                 if (i >= model.sensors.size()) break;
                 const float x = left + static_cast<float>(c) * (tileW + kTileGap);
                 DrawSensorTile(model.sensors[i], D2D1::RectF(Snap(x), Snap(y), Snap(x + tileW), Snap(y + tileH)));

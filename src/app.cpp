@@ -764,6 +764,7 @@ CardModel App::BuildCardModel() const {
                 std::wstring subtitle = io(disk.readBps, disk.writeBps);
                 if (!disk.model.empty()) subtitle = disk.model + L" · " + subtitle;
                 percentRow(MetricId::Disk, kDiskKeyBase + disk.number, title, disk.active, std::move(subtitle));
+                model.rows.back().half = true;  // drives side by side: the card stays short
             }
         } else {
             percentRow(MetricId::Disk, Key(MetricId::Disk), S(i18n::Str::CardDisk), s.diskActive,
@@ -878,7 +879,13 @@ void App::PresentCard() {
 void App::UpdateCard(bool reposition) {
     if (!cardWindow_ || !bar_) return;
     const CardModel model = BuildCardModel();
-    const SIZE size = card_.Measure(layout_.dpi, model);
+    MONITORINFO mi{sizeof(mi)};
+    GetMonitorInfoW(MonitorFromWindow(bar_, MONITOR_DEFAULTTONEAREST), &mi);
+    const int dpi = static_cast<int>(layout_.dpi);
+    const int gapPx = MulDiv(kCardGapDip, dpi, USER_DEFAULT_SCREEN_DPI);
+    // The card must fit between the taskbar and the other edge of the screen (the work area).
+    const int room = mi.rcWork.bottom - mi.rcWork.top;
+    const SIZE size = card_.Measure(layout_.dpi, model, std::max(room - 2 * gapPx, 200));
     if (!card_.Paint(model)) {
         Log(L"card paint failed");
         return;
@@ -887,13 +894,10 @@ void App::UpdateCard(bool reposition) {
     if (reposition) {
         logic::CardInput in;
         GetWindowRect(bar_, &in.strip);
-        MONITORINFO mi{sizeof(mi)};
-        GetMonitorInfoW(MonitorFromWindow(bar_, MONITOR_DEFAULTTONEAREST), &mi);
         in.monitor = mi.rcMonitor;
         in.card = size;
         in.marginPx = card_.ShadowMarginPx();
-        const int dpi = static_cast<int>(layout_.dpi);
-        in.gapPx = MulDiv(kCardGapDip, dpi, USER_DEFAULT_SCREEN_DPI);
+        in.gapPx = gapPx;
         in.slidePx = MulDiv(kCardSlideDip, dpi, USER_DEFAULT_SCREEN_DPI);
         in.verticalTaskbar = vertical_;
         const logic::CardPlacement placed = logic::PlaceCard(in);
