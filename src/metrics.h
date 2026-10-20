@@ -1,17 +1,41 @@
 #pragma once
 
 #include "common.h"
+#include "hardware.h"
 
 #include <pdh.h>
 
 #include <atomic>
 #include <cstdint>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+struct DiskSnapshot {
+    int number = 0;
+    std::wstring letters;  // "C: E:"
+    std::wstring model;
+    double active = 0.0;  // 0..100, Task Manager "active time"
+    uint64_t readBps = 0;
+    uint64_t writeBps = 0;
+    std::optional<double> temperature;  // °C
+    bool nvme = false;
+};
+
+enum class SensorKind { Temperature, Fan };
+enum class SensorGroup { Cpu, Gpu, Disk, Board };
+
+// A reading for the card's "Sensors" section.
+struct SensorReading {
+    SensorKind kind = SensorKind::Temperature;
+    SensorGroup group = SensorGroup::Cpu;
+    std::wstring name;   // "GPU", "NVMe · GVR1TB", "CPU fan"
+    double value = 0.0;  // °C or RPM
+};
 
 struct MetricsSnapshot {
     bool valid = false;
@@ -25,6 +49,17 @@ struct MetricsSnapshot {
     double gpu = 0.0;        // 0..100, busiest engine of any physical GPU (Task Manager semantics)
     uint64_t vramUsed = 0;   // dedicated memory of the main GPU
     uint64_t vramTotal = 0;  // 0 for integrated GPUs (no meaningful dedicated memory)
+
+    bool diskAvailable = false;
+    double diskActive = 0.0;   // busiest physical disk, 0..100
+    uint64_t diskReadBps = 0;  // all physical disks
+    uint64_t diskWriteBps = 0;
+    std::vector<DiskSnapshot> disks;
+
+    std::optional<double> cpuTemperature;  // °C (advanced sensors)
+    std::optional<double> gpuTemperature;  // °C, main GPU
+    std::optional<double> gpuFanRpm;
+    std::vector<SensorReading> sensors;  // everything known, for the card
 };
 
 struct SystemInfo {
@@ -72,6 +107,7 @@ private:
         std::wstring tag;  // "luid_0x00000000_0x0005e13d"
         std::wstring name;
         uint64_t dedicated = 0;
+        LUID luid{};
     };
 
     void Run();
@@ -79,6 +115,9 @@ private:
     void CloseQuery();
     bool SelectAdapters();
     void Collect(MetricsSnapshot& out);
+    void CollectGpu(MetricsSnapshot& out, bool collected);
+    void CollectDisks(MetricsSnapshot& out, bool collected);
+    void CollectSensors(MetricsSnapshot& out);
     bool ReadCpuFallback(double& value);
     bool ReadArray(PDH_HCOUNTER counter, DWORD format, std::vector<BYTE>& buffer, DWORD& count);
 
@@ -100,6 +139,9 @@ private:
     PDH_HCOUNTER cpuCounter_ = nullptr;
     PDH_HCOUNTER gpuEngineCounter_ = nullptr;
     PDH_HCOUNTER gpuMemoryCounter_ = nullptr;
+    PDH_HCOUNTER diskIdleCounter_ = nullptr;
+    PDH_HCOUNTER diskReadCounter_ = nullptr;
+    PDH_HCOUNTER diskWriteCounter_ = nullptr;
     std::vector<Adapter> adapters_;  // physical GPUs, main (largest dedicated memory) first
     ULONGLONG nextAdapterSearch_ = 0;
     int adapterMisses_ = 0;
@@ -107,6 +149,11 @@ private:
     MetricsSnapshot lastGpu_;  // last good GPU values, reused on a transient read failure
     std::vector<BYTE> engineBuffer_;
     std::vector<BYTE> memoryBuffer_;
+    std::vector<BYTE> diskBuffers_[3];
+    hw::GpuSensors gpuSensors_;
+    hw::StorageDevices storage_;
+    std::unordered_map<int, ULONGLONG> lastTemperatureRead_;  // disk number -> tick
+    std::wstring diskInstanceKey_;  // set of PDH disk instances; a change triggers re-enumeration
     std::unordered_map<std::wstring_view, double> engines_;
     ULARGE_INTEGER lastIdle_{}, lastKernel_{}, lastUser_{};
     bool haveCpuFallback_ = false;

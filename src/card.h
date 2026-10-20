@@ -17,12 +17,24 @@ struct CardRow {
     std::vector<float> history;  // oldest to newest, 0..1
 };
 
+// One line of the "Sensors" section: "AMD Radeon RX 6700 XT     54 °C · 576 RPM".
+struct CardSensorLine {
+    std::wstring name;
+    std::wstring value;
+    int level = 0;                // 0 normal, 1 warm, 2 hot
+    MetricId id = MetricId::Cpu;  // palette used for warm/hot
+};
+
 struct CardModel {
     std::wstring title;
     std::wstring window;  // "last 60 s"
     std::wstring hintLeft, hintRight;
     int capacity = 60;  // samples that fit in the graph
     std::vector<CardRow> rows;
+    std::wstring sensorsTitle;  // empty = no sensors section
+    std::vector<CardSensorLine> sensors;
+    std::wstring sensorsHint;  // faint line under the sensors (e.g. how to get more of them)
+    std::wstring notice;       // highlighted line above the footer (e.g. an available update)
 };
 
 // Details panel shown on hover: values, hardware model and a history graph per metric.

@@ -34,6 +34,7 @@ add_library(sysbar_core STATIC
     src/card.cpp
     src/format.cpp
     src/gfx.cpp
+    src/hardware.cpp
     src/i18n.cpp
     src/logic.cpp
     src/metrics.cpp
@@ -41,7 +42,7 @@ add_library(sysbar_core STATIC
     src/settings.cpp
 )
 target_include_directories(sysbar_core PUBLIC src)
-target_link_libraries(sysbar_core PUBLIC d2d1 dwrite dxgi pdh shell32 ole32 advapi32 wtsapi32)
+target_link_libraries(sysbar_core PUBLIC d2d1 dwrite dxgi gdi32 pdh shell32 ole32 advapi32 wtsapi32)
 sysbar_options(sysbar_core)
 
 add_executable(sys-bar WIN32 src/main.cpp src/resource.rc src/app.manifest)
@@ -54,6 +55,7 @@ if(SYSBAR_BUILD_TESTS)
         tests/test_main.cpp
         tests/test_format.cpp
         tests/test_gpu.cpp
+        tests/test_hardware.cpp
         tests/test_i18n.cpp
         tests/test_logic.cpp
         tests/test_render.cpp

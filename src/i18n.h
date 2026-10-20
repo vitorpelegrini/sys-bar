@@ -54,6 +54,27 @@ enum class Str {
     CardHintMenu,
     UnitGB,
     PercentFormat,  // "{0}%"
+    StripDisk,      // strip label, short ("DISK")
+    MenuDisk,
+    MenuTemperatures,
+    CardDisk,
+    CardDiskIo,  // "Read {0} · Write {1}"
+    UnitMBps,
+    CardSensors,
+    CardRpm,  // "{0} RPM"
+    MenuUpdates,
+    MenuCheckUpdates,
+    MenuAutoUpdate,
+    MenuUpdateInstall,   // "Install version {0}"
+    MenuUpdateDownload,  // "Download version {0}" (portable copies)
+    UpdateUpToDate,      // "You have the latest version ({0})"
+    UpdateChecking,
+    UpdateDownloading,  // "Downloading version {0}…"
+    UpdateFailed,
+    CardUpdateAvailable,  // "Version {0} available"
+    MenuAdvancedSensors,
+    MenuAdvancedSensorsActive,
+    CardSensorsHint,
     Count,
 };
 

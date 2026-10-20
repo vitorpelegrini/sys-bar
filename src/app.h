@@ -4,6 +4,7 @@
 #include "common.h"
 #include "gfx.h"
 #include "i18n.h"
+#include "logic.h"
 #include "metrics.h"
 #include "renderer.h"
 #include "settings.h"
@@ -48,6 +49,7 @@ private:
     void OnSample();
     void OnAnimationTick();
     void RebuildItems();
+    logic::Availability Available() const;
     void RefreshTheme(bool force);
     Theme CurrentTheme() const;
     void ApplyLanguage();

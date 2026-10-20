@@ -17,6 +17,10 @@ First public release.
   with thin animated bars.
 - Numbers that match Task Manager: CPU `% Processor Utility`, RAM in use, busiest GPU engine
   across all physical GPUs, dedicated video memory.
+- Disk activity (Task Manager's active time) in the strip, with read/write throughput in MB/s in the card.
+- Temperatures without drivers or administrator rights: GPU temperature and fan speed (WDDM 2.7+), NVMe/SSD
+  temperatures; shown as badges in the strip and in a "Sensors" section of the card. Disk temperatures are
+  only read while a drive is busy, so sleeping hard drives are never woken up.
 - Hover card with the hardware model, peak values and a 60-sample history graph per metric;
   history above 80% / 92% load is drawn in amber / red.
 - Context menu: choose metrics, update interval (0.5–5 s), language, high-load highlight,

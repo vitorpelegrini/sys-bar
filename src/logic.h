@@ -64,9 +64,21 @@ struct CardPlacement {
 CardPlacement PlaceCard(const CardInput& in);
 
 // ---- Visible metrics ---------------------------------------------------------------------------
+// Which metrics the current machine can provide.
+struct Availability {
+    bool gpu = false;
+    bool vram = false;
+    bool disk = false;
+};
+
 // Metrics shown in the strip, never empty: when every enabled metric is unavailable, CPU is shown.
-std::vector<MetricId> VisibleMetrics(const Settings& settings, bool gpuAvailable, bool vramAvailable);
+std::vector<MetricId> VisibleMetrics(const Settings& settings, const Availability& available);
 // Whether `id` may be turned off without leaving the strip empty.
-bool CanHide(const Settings& settings, MetricId id, bool gpuAvailable, bool vramAvailable);
+bool CanHide(const Settings& settings, MetricId id, const Availability& available);
+
+// ---- Temperatures -----------------------------------------------------------------------------
+// 0 = normal, 1 = warm (amber), 2 = hot (red). Processors (CPU/GPU) warm at 85 °C and are hot at
+// 95 °C; drives warm at 60 °C and are hot at 70 °C.
+int TemperatureLevel(MetricId id, double celsius);
 
 }  // namespace logic

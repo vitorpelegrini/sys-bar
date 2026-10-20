@@ -8,8 +8,8 @@
 #include <cstdint>
 #include <string>
 
-enum class MetricId { Cpu = 0, Ram, Gpu, Vram };
-constexpr int kMetricCount = 4;
+enum class MetricId { Cpu = 0, Ram, Gpu, Vram, Disk };
+constexpr int kMetricCount = 5;
 
 // Load levels at which a metric turns amber and red.
 constexpr float kWarnLoad = 0.80f;

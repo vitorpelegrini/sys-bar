@@ -27,6 +27,7 @@ constexpr float kVerticalRow = 42.0f;
 constexpr float kVerticalPad = 6.0f;
 constexpr float kMinBlockWidth = 30.0f;
 constexpr float kHoverRadius = 4.0f;
+constexpr float kBadgeGap = 6.0f;  // minimum space between the label and its badge
 
 // FNV-1a, enough to detect "nothing visible changed".
 struct Hasher {
@@ -118,6 +119,18 @@ ComPtr<IDWriteTextLayout> Renderer::MakeLabel(const std::wstring& text, float& b
     return layout;
 }
 
+ComPtr<IDWriteTextLayout> Renderer::MakeBadge(const std::wstring& text, float& baseline, float& width) {
+    ComPtr<IDWriteTextLayout> layout;
+    if (FAILED(gfx_.dwrite()->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()), labelFormat_.Get(),
+                                               1000.0f, 100.0f, &layout))) {
+        return nullptr;
+    }
+    gfx_.UseTabularFigures(layout.Get(), static_cast<UINT32>(text.size()));
+    baseline = TextBaseline(layout.Get());
+    width = TextWidth(layout.Get());
+    return layout;
+}
+
 ComPtr<IDWriteTextLayout> Renderer::MakeValue(const std::wstring& strong, const std::wstring& weak, float& baseline,
                                               float& width) {
     const std::wstring text = strong + weak;
@@ -165,8 +178,15 @@ SIZE Renderer::Layout(const LayoutInput& input, const std::vector<ItemView>& ite
         float worstBaseline = 0.0f, worstWidth = 0.0f;
         MakeValue(items[i].worstStrong, items[i].worstWeak, worstBaseline, worstWidth);
 
+        // Badges (temperatures) share the label line; the compact one-line layout has no room for them.
+        float labelLine = b.labelWidth;
+        if (!compact_ && !items[i].worstBadge.empty()) {
+            float badgeBaseline = 0.0f, badgeWidth = 0.0f;
+            MakeBadge(items[i].worstBadge, badgeBaseline, badgeWidth);
+            labelLine += kBadgeGap + badgeWidth;
+        }
         const float natural =
-            compact_ ? b.labelWidth + kCompactInlineGap + worstWidth : std::max(b.labelWidth, worstWidth);
+            compact_ ? b.labelWidth + kCompactInlineGap + worstWidth : std::max(labelLine, worstWidth);
         if (!input.vertical) {
             b.w = std::ceil(std::max(natural, kMinBlockWidth));
             b.x = cursor;
@@ -203,6 +223,15 @@ int Renderer::FirstOverflow(const std::vector<ItemView>& items, float* excessDip
             if (excessDip) *excessDip = width - room;
             return static_cast<int>(i);
         }
+        if (!compact_ && !items[i].badge.empty()) {  // the badge must fit next to the label
+            float badgeBaseline = 0.0f, badgeWidth = 0.0f;
+            MakeBadge(items[i].badge, badgeBaseline, badgeWidth);
+            const float line = b.labelWidth + kBadgeGap + badgeWidth;
+            if (line > b.w / b.contentScale + 0.01f) {
+                if (excessDip) *excessDip = line - b.w / b.contentScale;
+                return static_cast<int>(i);
+            }
+        }
     }
     return -1;
 }
@@ -217,6 +246,8 @@ uint64_t Renderer::Signature(const std::vector<ItemView>& items, bool hover) con
         const ItemView& item = items[i];
         h.Add(item.strong);
         h.Add(item.weak);
+        h.Add(compact_ ? std::wstring() : item.badge);
+        h.Add(item.badgeLevel);
         // Fill width in device pixels (half-pixel resolution): smaller changes are invisible.
         const int fill = static_cast<int>(std::lround(std::clamp(item.fraction, 0.0f, 1.0f) * blocks_[i].w /
                                                       blocks_[i].contentScale * scale_ * 2.0f));
@@ -293,6 +324,21 @@ bool Renderer::Paint(const std::vector<ItemView>& items, bool hover) {
 
         brush_->SetColor(Ink(theme_, light ? 0.60f : 0.62f));
         target_->DrawTextLayout(D2D1::Point2F(0.0f, Snap(labelBase) - b.labelBaseline), b.label.Get(), brush_.Get());
+
+        if (!compact_ && !item.badge.empty()) {
+            if (!b.badge || b.badgeText != item.badge) {
+                b.badge = MakeBadge(item.badge, b.badgeBaseline, b.badgeWidth);
+                b.badgeText = item.badge;
+            }
+            if (b.badge) {
+                const D2D1_COLOR_F color = item.badgeLevel >= 2   ? MetricColor(item.id, kCriticalLoad, theme_)
+                                           : item.badgeLevel == 1 ? MetricColor(item.id, kWarnLoad, theme_)
+                                                                  : Ink(theme_, light ? 0.60f : 0.62f);
+                brush_->SetColor(color);
+                target_->DrawTextLayout(D2D1::Point2F(b.w / s - b.badgeWidth, Snap(labelBase) - b.badgeBaseline),
+                                        b.badge.Get(), brush_.Get());
+            }
+        }
 
         brush_->SetColor(Ink(theme_, light ? 0.90f : 0.97f));
         target_->DrawTextLayout(D2D1::Point2F(valueX, Snap(valueBase) - b.valueBaseline), b.value.Get(), brush_.Get());

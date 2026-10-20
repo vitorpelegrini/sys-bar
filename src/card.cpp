@@ -29,9 +29,29 @@ constexpr float kSepToHint = 13.0f;
 constexpr float kIndent = 15.0f;  // text indent next to the colored marker
 constexpr float kMinGap = 20.0f;  // minimum space between left and right aligned texts
 constexpr int kShadowSteps = 14;
+constexpr float kSectionGap = 16.0f;      // last graph -> "Sensors" title
+constexpr float kSectionTitleGap = 4.0f;  // title baseline -> first sensor line
+constexpr float kSensorLine = 18.0f;      // height of one sensor line
+constexpr float kSensorBase = 13.0f;      // baseline offset inside a sensor line
+constexpr float kNoticeGap = 12.0f;
 
 float RowHeight() {
     return kValueSize * kCap + kValueToSub + kSubToSpark + kSparkHeight;
+}
+
+bool HasSensors(const CardModel& m) {
+    return !m.sensorsTitle.empty() && (!m.sensors.empty() || !m.sensorsHint.empty());
+}
+
+// Height of the optional sections between the graphs and the footer (sensors, notice).
+float ExtraHeight(const CardModel& m) {
+    float h = 0.0f;
+    if (HasSensors(m)) {
+        const size_t lines = m.sensors.size() + (m.sensorsHint.empty() ? 0 : 1);
+        h += kSectionGap + kSmallSize * kCap + kSectionTitleGap + static_cast<float>(lines) * kSensorLine;
+    }
+    if (!m.notice.empty()) h += kNoticeGap + kSmallSize * kCap;
+    return h;
 }
 
 float TotalHeight(size_t rows) {
@@ -98,9 +118,16 @@ SIZE Card::Measure(UINT dpi, const CardModel& model) {
     const float hintLeft = width(model.hintLeft, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
     const float hintRight = width(model.hintRight, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
     needed = std::max(needed, hintLeft + hintRight + (hintLeft > 0 && hintRight > 0 ? kMinGap : 0.0f));
+    for (const CardSensorLine& line : model.sensors) {
+        // Names are ellipsized, so only the value and a reasonable part of the name must fit.
+        needed = std::max(needed, std::min(width(line.name, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL), 200.0f) + kMinGap +
+                                      width(line.value, kSmallSize, DWRITE_FONT_WEIGHT_SEMI_BOLD));
+    }
+    needed = std::max(needed, width(model.sensorsHint, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL));
+    needed = std::max(needed, width(model.notice, kSmallSize, DWRITE_FONT_WEIGHT_SEMI_BOLD));
 
     width_ = std::clamp(std::ceil(needed + 2.0f * kPad), kMinWidth, kMaxWidth);
-    height_ = TotalHeight(model.rows.size());
+    height_ = TotalHeight(model.rows.size()) + ExtraHeight(model);
     size_ = {static_cast<LONG>(std::ceil((width_ + 2 * kShadow) * scale_)),
              static_cast<LONG>(std::ceil((height_ + 2 * kShadow) * scale_))};
     return size_;
@@ -306,6 +333,47 @@ bool Card::Paint(const CardModel& model) {
         y = sparkTop + kSparkHeight + kRowGap;
     }
     if (!model.rows.empty()) y -= kRowGap;
+
+    // Sensors: one line per device (temperature, fan).
+    if (HasSensors(model)) {
+        y += kSectionGap;
+        const float titleBase = y + kSmallSize * kCap;
+        DrawText(Text(model.sensorsTitle, kSmallSize, DWRITE_FONT_WEIGHT_SEMI_BOLD).Get(), left, titleBase, medium);
+        y = titleBase + kSectionTitleGap;
+        for (const CardSensorLine& line : model.sensors) {
+            const float base = y + kSensorBase;
+            auto value = Text(line.value, kSmallSize, DWRITE_FONT_WEIGHT_SEMI_BOLD);
+            const float valueWidth = value ? TextWidth(value.Get()) : 0.0f;
+            auto name = Text(line.name, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
+            if (name) {
+                name->SetMaxWidth(std::max(right - left - valueWidth - 12.0f, 20.0f));
+                ComPtr<IDWriteInlineObject> ellipsis;
+                gfx_.dwrite()->CreateEllipsisTrimmingSign(name.Get(), &ellipsis);
+                DWRITE_TRIMMING trimming{DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
+                name->SetTrimming(&trimming, ellipsis.Get());
+            }
+            const D2D1_COLOR_F valueColor = line.level >= 2   ? MetricColor(line.id, kCriticalLoad, theme_)
+                                            : line.level == 1 ? MetricColor(line.id, kWarnLoad, theme_)
+                                                              : strong;
+            DrawText(name.Get(), left, base, medium);
+            DrawTextRight(value.Get(), right, base, valueColor);
+            y += kSensorLine;
+        }
+        if (!model.sensorsHint.empty()) {
+            DrawText(Text(model.sensorsHint, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL).Get(), left, y + kSensorBase,
+                     faint);
+            y += kSensorLine;
+        }
+    }
+
+    // Notice (e.g. an available update), in the accent color.
+    if (!model.notice.empty()) {
+        y += kNoticeGap;
+        const float base = y + kSmallSize * kCap;
+        DrawText(Text(model.notice, kSmallSize, DWRITE_FONT_WEIGHT_SEMI_BOLD).Get(), left, base,
+                 MetricColor(MetricId::Cpu, 0.0f, theme_));
+        y = base;
+    }
 
     // Footer with usage hints.
     const float sep = Snap(y + kFooterGap) + 0.5f / scale_;

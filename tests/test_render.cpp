@@ -56,9 +56,21 @@ ItemView Memory(MetricId id, const wchar_t* label, uint64_t used, uint64_t total
     return item;
 }
 
-std::vector<ItemView> Sample(double cpu, uint64_t ram, double gpu, uint64_t vram, const wchar_t* unit = L"GB") {
-    return {Percent(MetricId::Cpu, L"CPU", cpu), Memory(MetricId::Ram, L"RAM", ram, kRamTotal, unit),
-            Percent(MetricId::Gpu, L"GPU", gpu), Memory(MetricId::Vram, L"VRAM", vram, kVramTotal, unit)};
+ItemView WithBadge(ItemView item, int celsius, int level = 0) {
+    item.badge = std::to_wstring(celsius) + L"°";
+    item.worstBadge = L"100°";
+    item.badgeLevel = level;
+    return item;
+}
+
+std::vector<ItemView> Sample(double cpu, uint64_t ram, double gpu, uint64_t vram, const wchar_t* unit = L"GB",
+                             const wchar_t* diskLabel = L"DISK") {
+    const int temperature = static_cast<int>(30 + gpu * 0.7);  // 30..100 °C as the load grows
+    return {WithBadge(Percent(MetricId::Cpu, L"CPU", cpu), temperature),
+            Memory(MetricId::Ram, L"RAM", ram, kRamTotal, unit),
+            WithBadge(Percent(MetricId::Gpu, L"GPU", gpu), temperature, temperature >= 95 ? 2 : temperature >= 85),
+            Memory(MetricId::Vram, L"VRAM", vram, kVramTotal, unit),
+            WithBadge(Percent(MetricId::Disk, diskLabel, cpu / 2), temperature / 2)};
 }
 
 uint8_t Alpha(uint32_t px) {
@@ -136,6 +148,16 @@ CardModel DemoCard(i18n::Lang lang) {
     row(MetricId::Gpu, S(Str::CardGpu), pct(L"94"), L"AMD Radeon RX 6700 XT", pct(L"99"), 0.75f, 0.2f, 0.25f);
     row(MetricId::Vram, S(Str::CardGpuMemory), gb(L"2,6"), text::Format(S(Str::CardOfTotal), {gb(L"12,0"), pct(L"21")}),
         gb(L"3,1"), 0.22f, 0.03f, 0.2f);
+    const std::wstring mbps = S(Str::UnitMBps);
+    row(MetricId::Disk, S(Str::CardDisk), pct(L"7"),
+        text::Format(S(Str::CardDiskIo), {L"12,4 " + mbps, L"0,8 " + mbps}), pct(L"64"), 0.05f, 0.08f, 0.6f);
+    model.sensorsTitle = S(Str::CardSensors);
+    model.sensors = {
+        {L"CPU", L"47 °C", 0, MetricId::Cpu},
+        {L"AMD Radeon RX 6700 XT", L"88 °C · " + text::Format(S(Str::CardRpm), {L"1460"}), 1, MetricId::Gpu},
+        {L"Samsung SSD 980 PRO 1TB (C:)", L"41 °C", 0, MetricId::Disk},
+    };
+    model.notice = text::Format(S(Str::CardUpdateAvailable), {L"1.1.0"});
     return model;
 }
 

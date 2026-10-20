@@ -13,8 +13,10 @@ namespace {
 
 constexpr DWORD kFirstSampleDelayMs = 400;     // rate counters need two samples
 constexpr ULONGLONG kAdapterRetryMs = 30'000;  // when no GPU is found, look again every 30 s
-constexpr int kAdapterMissLimit = 3;           // samples without our LUID before re-enumerating
-constexpr UINT kMicrosoftVendor = 0x1414;      // "Microsoft Basic Render Driver"
+constexpr int kAdapterMissLimit = 3;
+constexpr ULONGLONG kDiskTemperatureMs =
+    5'000;  // temperatures change slowly           // samples without our LUID before re-enumerating
+constexpr UINT kMicrosoftVendor = 0x1414;  // "Microsoft Basic Render Driver"
 constexpr UINT kBasicRenderDevice = 0x8c;
 
 bool IsValidStatus(DWORD status) {
@@ -218,6 +220,14 @@ bool MetricsSampler::OpenQuery() {
         ERROR_SUCCESS) {
         gpuMemoryCounter_ = nullptr;
     }
+    // Physical disks: Task Manager's "active time" is 100 - % Idle Time.
+    if (PdhAddEnglishCounterW(query_, L"\\PhysicalDisk(*)\\% Idle Time", 0, &diskIdleCounter_) != ERROR_SUCCESS ||
+        PdhAddEnglishCounterW(query_, L"\\PhysicalDisk(*)\\Disk Read Bytes/sec", 0, &diskReadCounter_) !=
+            ERROR_SUCCESS ||
+        PdhAddEnglishCounterW(query_, L"\\PhysicalDisk(*)\\Disk Write Bytes/sec", 0, &diskWriteCounter_) !=
+            ERROR_SUCCESS) {
+        diskIdleCounter_ = diskReadCounter_ = diskWriteCounter_ = nullptr;
+    }
     return true;
 }
 
@@ -225,6 +235,9 @@ void MetricsSampler::CloseQuery() {
     if (query_) PdhCloseQuery(query_);
     query_ = nullptr;
     cpuCounter_ = gpuEngineCounter_ = gpuMemoryCounter_ = nullptr;
+    diskIdleCounter_ = diskReadCounter_ = diskWriteCounter_ = nullptr;
+    gpuSensors_.Close();
+    storage_.Close();
 }
 
 // Lists the physical GPUs, main one (largest dedicated memory) first.
@@ -248,13 +261,16 @@ bool MetricsSampler::SelectAdapters() {
             const bool duplicate =
                 std::any_of(adapters_.begin(), adapters_.end(), [&](const Adapter& a) { return a.tag == tag; });
             if (!software && !duplicate) {
-                adapters_.push_back({tag, text::Trim(desc.Description), desc.DedicatedVideoMemory});
+                adapters_.push_back({tag, text::Trim(desc.Description), desc.DedicatedVideoMemory, desc.AdapterLuid});
             }
         }
         adapter.Reset();
     }
     std::stable_sort(adapters_.begin(), adapters_.end(),
                      [](const Adapter& a, const Adapter& b) { return a.dedicated > b.dedicated; });
+    std::vector<LUID> luids;
+    for (const Adapter& a : adapters_) luids.push_back(a.luid);
+    gpuSensors_.Open(luids);
     return !adapters_.empty();
 }
 
@@ -321,8 +337,14 @@ void MetricsSampler::Collect(MetricsSnapshot& out) {
         out.ramUsed = mem.ullTotalPhys - mem.ullAvailPhys;
     }
 
-    // GPU. Availability is latched once the counters produced data, so a transient failure (or a
-    // burst of process churn) reuses the last values instead of making GPU/VRAM blink in and out.
+    CollectGpu(out, collected);
+    CollectDisks(out, collected);
+    CollectSensors(out);
+}
+
+void MetricsSampler::CollectGpu(MetricsSnapshot& out, bool collected) {
+    // Availability is latched once the counters produced data, so a transient failure (or a burst of
+    // process churn) reuses the last values instead of making GPU/VRAM blink in and out.
     if (adapters_.empty() && GetTickCount64() >= nextAdapterSearch_) SelectAdapters();
     auto keepLast = [&] {
         out.gpuAvailable = gpuSeen_;
@@ -330,6 +352,14 @@ void MetricsSampler::Collect(MetricsSnapshot& out) {
         out.vramUsed = lastGpu_.vramUsed;
         out.vramTotal = lastGpu_.vramTotal;
     };
+
+    // Temperature and fan come from the kernel graphics driver, independently of the counters.
+    if (!adapters_.empty()) {
+        const hw::GpuReading main = gpuSensors_.Read(0);
+        out.gpuTemperature = main.temperature;
+        out.gpuFanRpm = main.fanRpm;
+    }
+
     if (adapters_.empty() || !collected) return keepLast();
 
     const Adapter& main = adapters_.front();
@@ -371,4 +401,82 @@ void MetricsSampler::Collect(MetricsSnapshot& out) {
     out.vramTotal = vramTotal;
     out.vramUsed = std::min(vramUsed, vramTotal);
     lastGpu_ = out;
+}
+
+void MetricsSampler::CollectDisks(MetricsSnapshot& out, bool collected) {
+    if (!collected || !diskIdleCounter_ || !diskReadCounter_ || !diskWriteCounter_) return;
+    const PDH_HCOUNTER counters[3] = {diskIdleCounter_, diskReadCounter_, diskWriteCounter_};
+    DWORD counts[3] = {};
+    for (int i = 0; i < 3; ++i) {
+        if (!ReadArray(counters[i], PDH_FMT_DOUBLE | PDH_FMT_NOCAP100, diskBuffers_[i], counts[i])) return;
+    }
+    const auto* idle = reinterpret_cast<const PDH_FMT_COUNTERVALUE_ITEM_W*>(diskBuffers_[0].data());
+    const auto* read = reinterpret_cast<const PDH_FMT_COUNTERVALUE_ITEM_W*>(diskBuffers_[1].data());
+    const auto* write = reinterpret_cast<const PDH_FMT_COUNTERVALUE_ITEM_W*>(diskBuffers_[2].data());
+    // The three arrays list the same instances, but the order is not guaranteed: match by name.
+    auto valueOf = [](const PDH_FMT_COUNTERVALUE_ITEM_W* items, DWORD count, const wchar_t* name) {
+        for (DWORD i = 0; i < count; ++i) {
+            if (items[i].szName && wcscmp(items[i].szName, name) == 0 && IsValidStatus(items[i].FmtValue.CStatus) &&
+                std::isfinite(items[i].FmtValue.doubleValue)) {
+                return std::max(0.0, items[i].FmtValue.doubleValue);
+            }
+        }
+        return 0.0;
+    };
+
+    std::wstring key;
+    for (DWORD i = 0; i < counts[0]; ++i) {
+        DiskSnapshot disk;
+        if (!hw::ParseDiskInstance(idle[i].szName, disk.number, disk.letters)) continue;
+        key += idle[i].szName;
+        key += L'|';
+        const double idlePercent = IsValidStatus(idle[i].FmtValue.CStatus) ? idle[i].FmtValue.doubleValue : 100.0;
+        disk.active = std::clamp(100.0 - (std::isfinite(idlePercent) ? idlePercent : 100.0), 0.0, 100.0);
+        disk.readBps = static_cast<uint64_t>(valueOf(read, counts[1], idle[i].szName));
+        disk.writeBps = static_cast<uint64_t>(valueOf(write, counts[2], idle[i].szName));
+        out.disks.push_back(std::move(disk));
+    }
+    if (key != diskInstanceKey_) {  // a disk was added or removed: refresh models and handles
+        diskInstanceKey_ = key;
+        storage_.Refresh();
+    }
+
+    const ULONGLONG now = GetTickCount64();
+    for (DiskSnapshot& disk : out.disks) {
+        // Temperatures are only read while a disk is busy anyway, never waking a sleeping drive.
+        const bool busy = disk.active > 0.0 || disk.readBps > 0 || disk.writeBps > 0;
+        ULONGLONG& last = lastTemperatureRead_[disk.number];
+        if (busy && now - last >= kDiskTemperatureMs) {
+            storage_.UpdateTemperature(disk.number);
+            last = now;
+        }
+        if (const hw::DiskDevice* device = storage_.Find(disk.number)) {
+            disk.model = device->model;
+            disk.nvme = device->nvme;
+            disk.temperature = device->temperature;
+        }
+        out.diskActive = std::max(out.diskActive, disk.active);
+        out.diskReadBps += disk.readBps;
+        out.diskWriteBps += disk.writeBps;
+    }
+    out.diskAvailable = !out.disks.empty();
+}
+
+void MetricsSampler::CollectSensors(MetricsSnapshot& out) {
+    if (out.cpuTemperature)
+        out.sensors.push_back({SensorKind::Temperature, SensorGroup::Cpu, L"CPU", *out.cpuTemperature});
+    for (size_t i = 0; i < adapters_.size(); ++i) {
+        const hw::GpuReading reading = i == 0 ? hw::GpuReading{out.gpuTemperature, out.gpuFanRpm} : gpuSensors_.Read(i);
+        if (reading.temperature) {
+            out.sensors.push_back({SensorKind::Temperature, SensorGroup::Gpu, adapters_[i].name, *reading.temperature});
+        }
+        if (reading.fanRpm)
+            out.sensors.push_back({SensorKind::Fan, SensorGroup::Gpu, adapters_[i].name, *reading.fanRpm});
+    }
+    for (const DiskSnapshot& disk : out.disks) {
+        if (!disk.temperature) continue;
+        std::wstring name = disk.model.empty() ? L"Disk " + std::to_wstring(disk.number) : disk.model;
+        if (!disk.letters.empty()) name += L" (" + disk.letters + L")";
+        out.sensors.push_back({SensorKind::Temperature, SensorGroup::Disk, name, *disk.temperature});
+    }
 }

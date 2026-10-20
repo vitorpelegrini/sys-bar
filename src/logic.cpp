@@ -92,27 +92,36 @@ CardPlacement PlaceCard(const CardInput& in) {
     return out;
 }
 
-std::vector<MetricId> VisibleMetrics(const Settings& s, bool gpuAvailable, bool vramAvailable) {
+std::vector<MetricId> VisibleMetrics(const Settings& s, const Availability& a) {
     std::vector<MetricId> out;
     if (s.showCpu) out.push_back(MetricId::Cpu);
     if (s.showRam) out.push_back(MetricId::Ram);
-    if (s.showGpu && gpuAvailable) out.push_back(MetricId::Gpu);
-    if (s.showVram && gpuAvailable && vramAvailable) out.push_back(MetricId::Vram);
+    if (s.showGpu && a.gpu) out.push_back(MetricId::Gpu);
+    if (s.showVram && a.gpu && a.vram) out.push_back(MetricId::Vram);
+    if (s.showDisk && a.disk) out.push_back(MetricId::Disk);
     if (out.empty()) out.push_back(MetricId::Cpu);  // never leave the user without anything to click
     return out;
 }
 
-bool CanHide(const Settings& s, MetricId id, bool gpuAvailable, bool vramAvailable) {
+bool CanHide(const Settings& s, MetricId id, const Availability& a) {
     Settings copy = s;
     switch (id) {
         case MetricId::Cpu: copy.showCpu = false; break;
         case MetricId::Ram: copy.showRam = false; break;
         case MetricId::Gpu: copy.showGpu = false; break;
         case MetricId::Vram: copy.showVram = false; break;
+        case MetricId::Disk: copy.showDisk = false; break;
     }
     // Hiding is allowed only if something that is actually available stays enabled.
-    return (copy.showCpu || copy.showRam || (copy.showGpu && gpuAvailable) ||
-            (copy.showVram && gpuAvailable && vramAvailable));
+    return copy.showCpu || copy.showRam || (copy.showGpu && a.gpu) || (copy.showVram && a.gpu && a.vram) ||
+           (copy.showDisk && a.disk);
+}
+
+int TemperatureLevel(MetricId id, double celsius) {
+    const bool drive = id == MetricId::Disk;
+    const double warm = drive ? 60.0 : 85.0;
+    const double hot = drive ? 70.0 : 95.0;
+    return celsius >= hot ? 2 : celsius >= warm ? 1 : 0;
 }
 
 }  // namespace logic

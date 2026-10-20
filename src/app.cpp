@@ -48,6 +48,8 @@ enum Command : UINT {
     kCmdShowRam,
     kCmdShowGpu,
     kCmdShowVram,
+    kCmdShowDisk,
+    kCmdShowTemperatures,
     kCmdColorByLoad,
     kCmdClickOpensTaskManager,
     kCmdAutostart,
@@ -472,14 +474,42 @@ void App::RebuildItems() {
         items_.push_back(std::move(item));
     };
 
-    for (MetricId id : logic::VisibleMetrics(settings_, s.gpuAvailable, s.vramTotal > 0)) {
+    // Temperature badge on the label line ("54°"), colored when warm/hot.
+    auto badge = [&](MetricId id, const std::optional<double>& celsius) {
+        if (!settings_.showTemperatures || !celsius || items_.empty()) return;
+        ItemView& item = items_.back();
+        item.badge = std::to_wstring(static_cast<int>(std::lround(*celsius))) + L"°";
+        item.worstBadge = L"100°";
+        item.badgeLevel = settings_.colorByLoad ? logic::TemperatureLevel(id, *celsius) : 0;
+    };
+
+    for (MetricId id : logic::VisibleMetrics(settings_, Available())) {
         switch (id) {
-            case MetricId::Cpu: percent(id, L"CPU", s.cpu); break;
+            case MetricId::Cpu:
+                percent(id, L"CPU", s.cpu);
+                badge(id, s.cpuTemperature);
+                break;
             case MetricId::Ram: memory(id, L"RAM", s.ramUsed, s.ramTotal); break;
-            case MetricId::Gpu: percent(id, L"GPU", s.gpu); break;
+            case MetricId::Gpu:
+                percent(id, L"GPU", s.gpu);
+                badge(id, s.gpuTemperature);
+                break;
             case MetricId::Vram: memory(id, L"VRAM", s.vramUsed, s.vramTotal); break;
+            case MetricId::Disk: {
+                percent(id, S(i18n::Str::StripDisk), s.diskActive);
+                std::optional<double> hottest;
+                for (const DiskSnapshot& disk : s.disks) {
+                    if (disk.temperature && (!hottest || *disk.temperature > *hottest)) hottest = disk.temperature;
+                }
+                badge(id, hottest);
+                break;
+            }
         }
     }
+}
+
+logic::Availability App::Available() const {
+    return {snapshot_.gpuAvailable, snapshot_.gpuAvailable && snapshot_.vramTotal > 0, snapshot_.diskAvailable};
 }
 
 void App::Render(bool force) {
@@ -524,6 +554,7 @@ void App::OnSample() {
     target_[static_cast<int>(MetricId::Ram)] = text::Ratio(snapshot_.ramUsed, snapshot_.ramTotal);
     target_[static_cast<int>(MetricId::Gpu)] = static_cast<float>(snapshot_.gpu / 100.0);
     target_[static_cast<int>(MetricId::Vram)] = text::Ratio(snapshot_.vramUsed, snapshot_.vramTotal);
+    target_[static_cast<int>(MetricId::Disk)] = static_cast<float>(snapshot_.diskActive / 100.0);
 
     for (int i = 0; i < kMetricCount; ++i) {
         history_[i].push_back(target_[i]);
@@ -665,6 +696,38 @@ CardModel App::BuildCardModel() const {
         percentRow(MetricId::Gpu, S(i18n::Str::CardGpu), s.gpu, info.gpuName);
         if (s.vramTotal > 0) memoryRow(MetricId::Vram, S(i18n::Str::CardGpuMemory), s.vramUsed, s.vramTotal);
     }
+    if (s.diskAvailable) {
+        auto rate = [&](uint64_t bytesPerSecond) {
+            return text::Fixed1(static_cast<double>(bytesPerSecond) / (1024.0 * 1024.0), decimal_) + L" " +
+                   S(i18n::Str::UnitMBps);
+        };
+        percentRow(MetricId::Disk, S(i18n::Str::CardDisk), s.diskActive,
+                   text::Format(S(i18n::Str::CardDiskIo), {rate(s.diskReadBps), rate(s.diskWriteBps)}));
+    }
+
+    // Sensors: one line per device, temperature and fan together ("54 °C · 576 RPM").
+    for (const SensorReading& reading : s.sensors) {
+        const MetricId group = reading.group == SensorGroup::Gpu    ? MetricId::Gpu
+                               : reading.group == SensorGroup::Disk ? MetricId::Disk
+                                                                    : MetricId::Cpu;
+        auto line = std::find_if(model.sensors.begin(), model.sensors.end(),
+                                 [&](const CardSensorLine& l) { return l.name == reading.name; });
+        if (line == model.sensors.end()) {
+            model.sensors.push_back({reading.name, L"", 0, group});
+            line = model.sensors.end() - 1;
+        }
+        std::wstring value;
+        if (reading.kind == SensorKind::Temperature) {
+            value = std::to_wstring(static_cast<int>(std::lround(reading.value))) + L" °C";
+            if (settings_.colorByLoad)
+                line->level = std::max(line->level, logic::TemperatureLevel(group, reading.value));
+        } else {
+            value =
+                text::Format(S(i18n::Str::CardRpm), {std::to_wstring(static_cast<int>(std::lround(reading.value)))});
+        }
+        line->value = line->value.empty() ? value : line->value + L" · " + value;
+    }
+    if (!model.sensors.empty()) model.sensorsTitle = S(i18n::Str::CardSensors);
     return model;
 }
 
@@ -753,18 +816,19 @@ void App::ShowMenu(POINT screen) {
         return;
     }
 
-    const bool gpu = snapshot_.gpuAvailable;
-    const bool vram = gpu && snapshot_.vramTotal > 0;
+    const logic::Availability available = Available();
     auto check = [](bool on) { return static_cast<UINT>(MF_STRING | (on ? MF_CHECKED : MF_UNCHECKED)); };
-    auto toggle = [&](UINT id, bool on, MetricId metric, bool available, i18n::Str label) {
+    auto toggle = [&](UINT id, bool on, MetricId metric, bool present, i18n::Str label) {
         UINT flags = check(on);
-        if (!available || (on && !logic::CanHide(settings_, metric, gpu, vram))) flags |= MF_GRAYED;
+        if (!present || (on && !logic::CanHide(settings_, metric, available))) flags |= MF_GRAYED;
         AppendMenuW(menu, flags, id, S(label));
     };
     toggle(kCmdShowCpu, settings_.showCpu, MetricId::Cpu, true, i18n::Str::MenuCpu);
     toggle(kCmdShowRam, settings_.showRam, MetricId::Ram, true, i18n::Str::MenuRam);
-    toggle(kCmdShowGpu, settings_.showGpu, MetricId::Gpu, gpu, i18n::Str::MenuGpu);
-    toggle(kCmdShowVram, settings_.showVram, MetricId::Vram, vram, i18n::Str::MenuVram);
+    toggle(kCmdShowGpu, settings_.showGpu, MetricId::Gpu, available.gpu, i18n::Str::MenuGpu);
+    toggle(kCmdShowVram, settings_.showVram, MetricId::Vram, available.vram, i18n::Str::MenuVram);
+    toggle(kCmdShowDisk, settings_.showDisk, MetricId::Disk, available.disk, i18n::Str::MenuDisk);
+    AppendMenuW(menu, check(settings_.showTemperatures), kCmdShowTemperatures, S(i18n::Str::MenuTemperatures));
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
     bool presetSelected = false;
@@ -821,10 +885,8 @@ void App::ShowMenu(POINT screen) {
 }
 
 void App::Execute(UINT command) {
-    const bool gpu = snapshot_.gpuAvailable;
-    const bool vram = gpu && snapshot_.vramTotal > 0;
     auto toggle = [&](bool& flag, MetricId id) {
-        if (flag && !logic::CanHide(settings_, id, gpu, vram)) return;  // keep at least one metric
+        if (flag && !logic::CanHide(settings_, id, Available())) return;  // keep at least one metric
         flag = !flag;
         settings_.Save();
         Reposition();
@@ -835,6 +897,12 @@ void App::Execute(UINT command) {
         case kCmdShowRam: toggle(settings_.showRam, MetricId::Ram); break;
         case kCmdShowGpu: toggle(settings_.showGpu, MetricId::Gpu); break;
         case kCmdShowVram: toggle(settings_.showVram, MetricId::Vram); break;
+        case kCmdShowDisk: toggle(settings_.showDisk, MetricId::Disk); break;
+        case kCmdShowTemperatures:
+            settings_.showTemperatures = !settings_.showTemperatures;
+            settings_.Save();
+            Reposition();
+            break;
         case kCmdColorByLoad:
             settings_.colorByLoad = !settings_.colorByLoad;
             settings_.Save();

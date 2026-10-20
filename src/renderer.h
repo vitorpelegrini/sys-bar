@@ -13,8 +13,11 @@ struct ItemView {
     std::wstring weak;         // dimmed suffix ("%", " / 31,9 GB")
     std::wstring worstStrong;  // widest possible text -> fixed column widths, nothing ever shifts
     std::wstring worstWeak;
-    float fraction = 0.0f;  // bar fill (animated), 0..1
-    float load = 0.0f;      // actual load, 0..1 (drives the color)
+    std::wstring badge;       // small text on the label line, e.g. a temperature ("54°")
+    std::wstring worstBadge;  // widest possible badge; empty = the column never shows one
+    int badgeLevel = 0;       // 0 normal, 1 warm (amber), 2 hot (red)
+    float fraction = 0.0f;    // bar fill (animated), 0..1
+    float load = 0.0f;        // actual load, 0..1 (drives the color)
 };
 
 struct LayoutInput {
@@ -54,11 +57,15 @@ private:
         ComPtr<IDWriteTextLayout> value;
         float valueBaseline = 0, valueWidth = 0;
         std::wstring strong, weak;  // text currently held by `value`
+        ComPtr<IDWriteTextLayout> badge;
+        float badgeBaseline = 0, badgeWidth = 0;
+        std::wstring badgeText;  // text currently held by `badge`
     };
 
     bool EnsureTarget();
     void ResetTarget();
     ComPtr<IDWriteTextLayout> MakeLabel(const std::wstring& text, float& baseline, float& width);
+    ComPtr<IDWriteTextLayout> MakeBadge(const std::wstring& text, float& baseline, float& width);
     ComPtr<IDWriteTextLayout> MakeValue(const std::wstring& strong, const std::wstring& weak, float& baseline,
                                         float& width);
     uint64_t Signature(const std::vector<ItemView>& items, bool hover) const;

@@ -64,6 +64,8 @@ void Settings::Load() {
     showRam = ReadBool(file, L"ShowRam", showRam);
     showGpu = ReadBool(file, L"ShowGpu", showGpu);
     showVram = ReadBool(file, L"ShowVram", showVram);
+    showDisk = ReadBool(file, L"ShowDisk", showDisk);
+    showTemperatures = ReadBool(file, L"ShowTemperatures", showTemperatures);
     colorByLoad = ReadBool(file, L"ColorByLoad", colorByLoad);
     clickOpensTaskManager = ReadBool(file, L"ClickOpensTaskManager", clickOpensTaskManager);
     intervalMs = std::clamp<DWORD>(GetPrivateProfileIntW(kSection, L"IntervalMs", intervalMs, file.c_str()),
@@ -73,7 +75,7 @@ void Settings::Load() {
     wchar_t lang[32] = {};
     GetPrivateProfileStringW(kSection, L"Language", language.c_str(), lang, 32, file.c_str());
     language = lang[0] ? lang : L"auto";
-    if (!showCpu && !showRam && !showGpu && !showVram) showCpu = true;
+    if (!showCpu && !showRam && !showGpu && !showVram && !showDisk) showCpu = true;
 }
 
 void Settings::Save() const {
@@ -83,6 +85,8 @@ void Settings::Save() const {
     WriteValue(file, L"ShowRam", std::to_wstring(showRam));
     WriteValue(file, L"ShowGpu", std::to_wstring(showGpu));
     WriteValue(file, L"ShowVram", std::to_wstring(showVram));
+    WriteValue(file, L"ShowDisk", std::to_wstring(showDisk));
+    WriteValue(file, L"ShowTemperatures", std::to_wstring(showTemperatures));
     WriteValue(file, L"ColorByLoad", std::to_wstring(colorByLoad));
     WriteValue(file, L"ClickOpensTaskManager", std::to_wstring(clickOpensTaskManager));
     WriteValue(file, L"IntervalMs", std::to_wstring(intervalMs));

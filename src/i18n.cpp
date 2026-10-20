@@ -20,7 +20,8 @@ constexpr std::array<Table, kLanguageCount> kStrings = {{
      L"Automatic (system)", L"Open Task Manager", L"About sys-bar {0}", L"Exit sys-bar",
      L"Performance", L"CPU", L"Memory", L"GPU", L"GPU memory", L"of {0} · {1} in use", L"max. {0}",
      L"{0} threads", L"last {0} s", L"last {0} min", L"Click: Task Manager", L"Right-click: options", L"GB",
-     L"{0}%"},
+     L"{0}%",
+     L"DISK", L"Disk", L"Show temperatures in the bar", L"Disk", L"Read {0} · Write {1}", L"MB/s", L"Sensors", L"{0} RPM", L"Updates", L"Check for updates now", L"Install updates automatically", L"Install version {0}", L"Download version {0}", L"You have the latest version ({0})", L"Checking for updates…", L"Downloading version {0}…", L"Update failed, will retry later", L"Version {0} available", L"Enable advanced sensors (CPU, fans)…", L"Advanced sensors active", L"Advanced sensors: CPU and fans (right-click)"},
     // Português (Brasil)
     {L"CPU", L"Memória RAM", L"GPU", L"Memória da GPU (VRAM)", L"Intervalo de atualização",
      L"{0} s", L"Destacar carga alta (âmbar/vermelho)", L"Abrir o Gerenciador de Tarefas ao clicar",
@@ -28,7 +29,8 @@ constexpr std::array<Table, kLanguageCount> kStrings = {{
      L"Sobre o sys-bar {0}", L"Sair do sys-bar",
      L"Desempenho", L"CPU", L"Memória", L"GPU", L"Memória da GPU", L"de {0} · {1} em uso",
      L"máx. {0}", L"{0} threads", L"últimos {0} s", L"últimos {0} min",
-     L"Clique: Gerenciador de Tarefas", L"Botão direito: opções", L"GB", L"{0}%"},
+     L"Clique: Gerenciador de Tarefas", L"Botão direito: opções", L"GB", L"{0}%",
+     L"DISCO", L"Disco", L"Mostrar temperaturas na barra", L"Disco", L"Leitura {0} · Gravação {1}", L"MB/s", L"Sensores", L"{0} RPM", L"Atualizações", L"Procurar atualizações agora", L"Instalar atualizações automaticamente", L"Instalar a versão {0}", L"Baixar a versão {0}", L"Você tem a versão mais recente ({0})", L"Procurando atualizações…", L"Baixando a versão {0}…", L"A atualização falhou; nova tentativa mais tarde", L"Versão {0} disponível", L"Ativar sensores avançados (CPU, fans)…", L"Sensores avançados ativos", L"Sensores avançados: CPU e fans (botão direito)"},
     // Español
     {L"CPU", L"Memoria (RAM)", L"GPU", L"Memoria de GPU (VRAM)", L"Intervalo de actualización", L"{0} s",
      L"Resaltar carga alta (ámbar/rojo)", L"Abrir el Administrador de tareas al hacer clic",
@@ -36,7 +38,8 @@ constexpr std::array<Table, kLanguageCount> kStrings = {{
      L"Acerca de sys-bar {0}", L"Salir de sys-bar",
      L"Rendimiento", L"CPU", L"Memoria", L"GPU", L"Memoria de GPU", L"de {0} · {1} en uso",
      L"máx. {0}", L"{0} hilos", L"últimos {0} s", L"últimos {0} min",
-     L"Clic: Administrador de tareas", L"Clic derecho: opciones", L"GB", L"{0}%"},
+     L"Clic: Administrador de tareas", L"Clic derecho: opciones", L"GB", L"{0}%",
+     L"DISCO", L"Disco", L"Mostrar temperaturas en la barra", L"Disco", L"Lectura {0} · Escritura {1}", L"MB/s", L"Sensores", L"{0} RPM", L"Actualizaciones", L"Buscar actualizaciones ahora", L"Instalar actualizaciones automáticamente", L"Instalar la versión {0}", L"Descargar la versión {0}", L"Tienes la versión más reciente ({0})", L"Buscando actualizaciones…", L"Descargando la versión {0}…", L"La actualización falló; se reintentará más tarde", L"Versión {0} disponible", L"Activar sensores avanzados (CPU, ventiladores)…", L"Sensores avanzados activos", L"Sensores avanzados: CPU y ventiladores (clic derecho)"},
     // Français
     {L"Processeur (CPU)", L"Mémoire (RAM)", L"GPU", L"Mémoire GPU (VRAM)",
      L"Intervalle d’actualisation", L"{0} s", L"Mettre en évidence la charge élevée (ambre/rouge)",
@@ -46,14 +49,16 @@ constexpr std::array<Table, kLanguageCount> kStrings = {{
      L"Performances", L"Processeur", L"Mémoire", L"GPU", L"Mémoire GPU",
      L"sur {0} · {1} utilisés", L"max. {0}", L"{0} threads", L"dernières {0} s",
      L"dernières {0} min", L"Clic : Gestionnaire des tâches", L"Clic droit : options", L"Go",
-     L"{0} %"},
+     L"{0} %",
+     L"DISQUE", L"Disque", L"Afficher les températures dans la barre", L"Disque", L"Lecture {0} · Écriture {1}", L"Mo/s", L"Capteurs", L"{0} tr/min", L"Mises à jour", L"Rechercher les mises à jour", L"Installer les mises à jour automatiquement", L"Installer la version {0}", L"Télécharger la version {0}", L"Vous avez la dernière version ({0})", L"Recherche de mises à jour…", L"Téléchargement de la version {0}…", L"La mise à jour a échoué ; nouvel essai plus tard", L"Version {0} disponible", L"Activer les capteurs avancés (CPU, ventilateurs)…", L"Capteurs avancés actifs", L"Capteurs avancés : CPU et ventilateurs (clic droit)"},
     // Deutsch
     {L"CPU", L"Arbeitsspeicher (RAM)", L"GPU", L"GPU-Speicher (VRAM)", L"Aktualisierungsintervall", L"{0} s",
      L"Hohe Auslastung hervorheben (Orange/Rot)", L"Task-Manager per Klick öffnen", L"Mit Windows starten",
      L"Sprache", L"Automatisch (System)", L"Task-Manager öffnen", L"Über sys-bar {0}", L"sys-bar beenden",
      L"Leistung", L"CPU", L"Arbeitsspeicher", L"GPU", L"GPU-Speicher", L"von {0} · {1} belegt",
      L"max. {0}", L"{0} Threads", L"letzte {0} s", L"letzte {0} min", L"Klick: Task-Manager",
-     L"Rechtsklick: Optionen", L"GB", L"{0} %"},
+     L"Rechtsklick: Optionen", L"GB", L"{0} %",
+     L"DISK", L"Datenträger", L"Temperaturen in der Leiste anzeigen", L"Datenträger", L"Lesen {0} · Schreiben {1}", L"MB/s", L"Sensoren", L"{0} U/min", L"Updates", L"Jetzt nach Updates suchen", L"Updates automatisch installieren", L"Version {0} installieren", L"Version {0} herunterladen", L"Sie haben die neueste Version ({0})", L"Suche nach Updates…", L"Version {0} wird heruntergeladen…", L"Update fehlgeschlagen, neuer Versuch später", L"Version {0} verfügbar", L"Erweiterte Sensoren aktivieren (CPU, Lüfter)…", L"Erweiterte Sensoren aktiv", L"Erweiterte Sensoren: CPU und Lüfter (Rechtsklick)"},
     // Italiano
     {L"CPU", L"Memoria (RAM)", L"GPU", L"Memoria GPU (VRAM)", L"Intervallo di aggiornamento", L"{0} s",
      L"Evidenzia carico elevato (ambra/rosso)", L"Apri Gestione attività al clic", L"Avvia con Windows",
@@ -61,7 +66,8 @@ constexpr std::array<Table, kLanguageCount> kStrings = {{
      L"Esci da sys-bar",
      L"Prestazioni", L"CPU", L"Memoria", L"GPU", L"Memoria GPU", L"di {0} · {1} in uso", L"max {0}",
      L"{0} thread", L"ultimi {0} s", L"ultimi {0} min", L"Clic: Gestione attività", L"Clic destro: opzioni",
-     L"GB", L"{0}%"},
+     L"GB", L"{0}%",
+     L"DISCO", L"Disco", L"Mostra le temperature nella barra", L"Disco", L"Lettura {0} · Scrittura {1}", L"MB/s", L"Sensori", L"{0} RPM", L"Aggiornamenti", L"Cerca aggiornamenti ora", L"Installa gli aggiornamenti automaticamente", L"Installa la versione {0}", L"Scarica la versione {0}", L"Hai la versione più recente ({0})", L"Ricerca aggiornamenti…", L"Download della versione {0}…", L"Aggiornamento non riuscito, nuovo tentativo più tardi", L"Versione {0} disponibile", L"Attiva i sensori avanzati (CPU, ventole)…", L"Sensori avanzati attivi", L"Sensori avanzati: CPU e ventole (clic destro)"},
     // Polski
     {L"CPU", L"Pamięć (RAM)", L"GPU", L"Pamięć GPU (VRAM)", L"Częstotliwość odświeżania",
      L"{0} s", L"Wyróżniaj wysokie obciążenie (bursztynowy/czerwony)",
@@ -70,7 +76,8 @@ constexpr std::array<Table, kLanguageCount> kStrings = {{
      L"Zamknij sys-bar",
      L"Wydajność", L"CPU", L"Pamięć", L"GPU", L"Pamięć GPU", L"z {0} · {1} w użyciu",
      L"maks. {0}", L"Wątki: {0}", L"ostatnie {0} s", L"ostatnie {0} min", L"Kliknięcie: Menedżer zadań",
-     L"Prawy przycisk: opcje", L"GB", L"{0}%"},
+     L"Prawy przycisk: opcje", L"GB", L"{0}%",
+     L"DYSK", L"Dysk", L"Pokazuj temperatury na pasku", L"Dysk", L"Odczyt {0} · Zapis {1}", L"MB/s", L"Czujniki", L"{0} obr./min", L"Aktualizacje", L"Sprawdź aktualizacje teraz", L"Instaluj aktualizacje automatycznie", L"Zainstaluj wersję {0}", L"Pobierz wersję {0}", L"Masz najnowszą wersję ({0})", L"Sprawdzanie aktualizacji…", L"Pobieranie wersji {0}…", L"Aktualizacja nie powiodła się, ponowna próba później", L"Dostępna wersja {0}", L"Włącz zaawansowane czujniki (CPU, wentylatory)…", L"Zaawansowane czujniki aktywne", L"Zaawansowane czujniki: CPU i wentylatory (prawy przycisk)"},
     // Türkçe
     {L"CPU", L"Bellek (RAM)", L"GPU", L"GPU belleği (VRAM)", L"Güncelleme aralığı", L"{0} sn",
      L"Yüksek yükü vurgula (kehribar/kırmızı)", L"Tıklayınca Görev Yöneticisi'ni aç",
@@ -78,7 +85,8 @@ constexpr std::array<Table, kLanguageCount> kStrings = {{
      L"sys-bar hakkında {0}", L"sys-bar'dan çık",
      L"Performans", L"CPU", L"Bellek", L"GPU", L"GPU belleği", L"{0} içinde · {1} kullanımda",
      L"en fazla {0}", L"{0} iş parçacığı", L"son {0} sn", L"son {0} dk",
-     L"Tıklama: Görev Yöneticisi", L"Sağ tık: seçenekler", L"GB", L"%{0}"},
+     L"Tıklama: Görev Yöneticisi", L"Sağ tık: seçenekler", L"GB", L"%{0}",
+     L"DİSK", L"Disk", L"Sıcaklıkları çubukta göster", L"Disk", L"Okuma {0} · Yazma {1}", L"MB/sn", L"Sensörler", L"{0} RPM", L"Güncellemeler", L"Güncellemeleri şimdi denetle", L"Güncellemeleri otomatik yükle", L"{0} sürümünü yükle", L"{0} sürümünü indir", L"En son sürüme sahipsiniz ({0})", L"Güncellemeler denetleniyor…", L"{0} sürümü indiriliyor…", L"Güncelleme başarısız, daha sonra yeniden denenecek", L"{0} sürümü mevcut", L"Gelişmiş sensörleri etkinleştir (CPU, fanlar)…", L"Gelişmiş sensörler etkin", L"Gelişmiş sensörler: CPU ve fanlar (sağ tık)"},
     // Русский
     {L"ЦП (CPU)", L"Память (RAM)", L"ГП (GPU)",
      L"Память ГП (VRAM)", L"Интервал обновления",
@@ -96,7 +104,8 @@ constexpr std::array<Table, kLanguageCount> kStrings = {{
      L"последние {0} мин",
      L"Щелчок: диспетчер задач",
      L"Правый щелчок: параметры",
-     L"ГБ", L"{0}%"},
+     L"ГБ", L"{0}%",
+     L"ДИСК", L"Диск", L"Показывать температуры на панели", L"Диск", L"Чтение {0} · Запись {1}", L"МБ/с", L"Датчики", L"{0} об/мин", L"Обновления", L"Проверить обновления сейчас", L"Устанавливать обновления автоматически", L"Установить версию {0}", L"Скачать версию {0}", L"У вас последняя версия ({0})", L"Проверка обновлений…", L"Загрузка версии {0}…", L"Не удалось обновить, повторим позже", L"Доступна версия {0}", L"Включить расширенные датчики (ЦП, вентиляторы)…", L"Расширенные датчики включены", L"Расширенные датчики: ЦП и вентиляторы (правый щелчок)"},
     // Українська
     {L"ЦП (CPU)", L"Пам’ять (RAM)", L"ГП (GPU)",
      L"Пам’ять ГП (VRAM)", L"Інтервал оновлення",
@@ -114,7 +123,8 @@ constexpr std::array<Table, kLanguageCount> kStrings = {{
      L"останні {0} хв",
      L"Клацання: диспетчер завдань",
      L"Права кнопка: параметри",
-     L"ГБ", L"{0}%"},
+     L"ГБ", L"{0}%",
+     L"ДИСК", L"Диск", L"Показувати температури на панелі", L"Диск", L"Читання {0} · Запис {1}", L"МБ/с", L"Датчики", L"{0} об/хв", L"Оновлення", L"Перевірити оновлення зараз", L"Встановлювати оновлення автоматично", L"Встановити версію {0}", L"Завантажити версію {0}", L"У вас остання версія ({0})", L"Перевірка оновлень…", L"Завантаження версії {0}…", L"Не вдалося оновити, повторимо пізніше", L"Доступна версія {0}", L"Увімкнути розширені датчики (ЦП, вентилятори)…", L"Розширені датчики увімкнено", L"Розширені датчики: ЦП і вентилятори (правий клік)"},
     // 日本語
     {L"CPU", L"メモリ (RAM)", L"GPU", L"GPU メモリ (VRAM)", L"更新間隔",
      L"{0} 秒", L"高負荷を強調表示 (黄/赤)",
@@ -125,7 +135,8 @@ constexpr std::array<Table, kLanguageCount> kStrings = {{
      L"パフォーマンス", L"CPU", L"メモリ", L"GPU", L"GPU メモリ",
      L"{0} 中 · {1} 使用中", L"最大 {0}", L"{0} スレッド",
      L"過去 {0} 秒", L"過去 {0} 分", L"クリック: タスク マネージャー",
-     L"右クリック: オプション", L"GB", L"{0}%"},
+     L"右クリック: オプション", L"GB", L"{0}%",
+     L"ディスク", L"ディスク", L"バーに温度を表示", L"ディスク", L"読み取り {0} · 書き込み {1}", L"MB/秒", L"センサー", L"{0} RPM", L"更新", L"今すぐ更新を確認", L"更新を自動的にインストール", L"バージョン {0} をインストール", L"バージョン {0} をダウンロード", L"最新バージョンです ({0})", L"更新を確認しています…", L"バージョン {0} をダウンロードしています…", L"更新に失敗しました。後で再試行します", L"バージョン {0} が利用可能", L"詳細センサーを有効にする (CPU、ファン)…", L"詳細センサーは有効です", L"詳細センサー: CPU とファン (右クリック)"},
     // 한국어
     {L"CPU", L"메모리(RAM)", L"GPU", L"GPU 메모리(VRAM)", L"업데이트 간격",
      L"{0}초", L"높은 부하 강조(주황/빨강)",
@@ -134,7 +145,8 @@ constexpr std::array<Table, kLanguageCount> kStrings = {{
      L"sys-bar 정보 {0}", L"sys-bar 종료",
      L"성능", L"CPU", L"메모리", L"GPU", L"GPU 메모리", L"{0} 중 · {1} 사용 중",
      L"최대 {0}", L"스레드 {0}개", L"최근 {0}초", L"최근 {0}분",
-     L"클릭: 작업 관리자", L"오른쪽 클릭: 옵션", L"GB", L"{0}%"},
+     L"클릭: 작업 관리자", L"오른쪽 클릭: 옵션", L"GB", L"{0}%",
+     L"디스크", L"디스크", L"표시줄에 온도 표시", L"디스크", L"읽기 {0} · 쓰기 {1}", L"MB/s", L"센서", L"{0} RPM", L"업데이트", L"지금 업데이트 확인", L"업데이트 자동 설치", L"버전 {0} 설치", L"버전 {0} 다운로드", L"최신 버전입니다({0})", L"업데이트 확인 중…", L"버전 {0} 다운로드 중…", L"업데이트 실패, 나중에 다시 시도합니다", L"버전 {0} 사용 가능", L"고급 센서 사용(CPU, 팬)…", L"고급 센서 활성", L"고급 센서: CPU 및 팬(오른쪽 클릭)"},
     // 简体中文
     {L"CPU", L"内存 (RAM)", L"GPU", L"GPU 内存 (VRAM)", L"更新间隔", L"{0} 秒",
      L"突出显示高负载（琥珀色/红色）",
@@ -143,7 +155,8 @@ constexpr std::array<Table, kLanguageCount> kStrings = {{
      L"退出 sys-bar",
      L"性能", L"CPU", L"内存", L"GPU", L"GPU 内存", L"共 {0} · 已用 {1}",
      L"最高 {0}", L"{0} 个线程", L"最近 {0} 秒", L"最近 {0} 分钟",
-     L"单击：任务管理器", L"右键：选项", L"GB", L"{0}%"},
+     L"单击：任务管理器", L"右键：选项", L"GB", L"{0}%",
+     L"磁盘", L"磁盘", L"在任务栏中显示温度", L"磁盘", L"读取 {0} · 写入 {1}", L"MB/秒", L"传感器", L"{0} RPM", L"更新", L"立即检查更新", L"自动安装更新", L"安装版本 {0}", L"下载版本 {0}", L"已是最新版本（{0}）", L"正在检查更新…", L"正在下载版本 {0}…", L"更新失败，稍后重试", L"版本 {0} 可用", L"启用高级传感器（CPU、风扇）…", L"高级传感器已启用", L"高级传感器：CPU 和风扇（右键）"},
     // 繁體中文
     {L"CPU", L"記憶體 (RAM)", L"GPU", L"GPU 記憶體 (VRAM)", L"更新間隔",
      L"{0} 秒", L"醒目提示高負載（琥珀色/紅色）",
@@ -153,7 +166,8 @@ constexpr std::array<Table, kLanguageCount> kStrings = {{
      L"效能", L"CPU", L"記憶體", L"GPU", L"GPU 記憶體",
      L"共 {0} · 已使用 {1}", L"最高 {0}", L"{0} 個執行緒",
      L"最近 {0} 秒", L"最近 {0} 分鐘", L"按一下：工作管理員",
-     L"按右鍵：選項", L"GB", L"{0}%"},
+     L"按右鍵：選項", L"GB", L"{0}%",
+     L"磁碟", L"磁碟", L"在工作列中顯示溫度", L"磁碟", L"讀取 {0} · 寫入 {1}", L"MB/秒", L"感應器", L"{0} RPM", L"更新", L"立即檢查更新", L"自動安裝更新", L"安裝版本 {0}", L"下載版本 {0}", L"已是最新版本（{0}）", L"正在檢查更新…", L"正在下載版本 {0}…", L"更新失敗，稍後重試", L"版本 {0} 可用", L"啟用進階感應器（CPU、風扇）…", L"進階感應器已啟用", L"進階感應器：CPU 和風扇（按右鍵）"},
 }};
 // clang-format on
 

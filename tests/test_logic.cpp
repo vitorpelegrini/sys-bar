@@ -214,26 +214,41 @@ TEST(Card_beside_a_vertical_taskbar) {
 
 TEST(Visible_metrics_follow_settings_and_availability) {
     Settings s;
-    CHECK_EQ(VisibleMetrics(s, true, true).size(), size_t{4});
-    CHECK_EQ(VisibleMetrics(s, false, false).size(), size_t{2});  // no GPU counters
-    CHECK_EQ(VisibleMetrics(s, true, false).size(), size_t{3});   // integrated GPU: no VRAM
+    CHECK_EQ(VisibleMetrics(s, {true, true, true}).size(), size_t{5});
+    CHECK_EQ(VisibleMetrics(s, {false, false, true}).size(), size_t{3});  // no GPU counters
+    CHECK_EQ(VisibleMetrics(s, {true, false, true}).size(), size_t{4});   // integrated GPU: no VRAM
+    CHECK_EQ(VisibleMetrics(s, {true, true, false}).size(), size_t{4});   // no disk counters
+    s.showDisk = false;
+    CHECK_EQ(VisibleMetrics(s, {true, true, true}).size(), size_t{4});
 }
 
 TEST(Strip_is_never_empty) {
     Settings s;
-    s.showCpu = s.showRam = false;                         // only GPU metrics enabled...
-    const auto visible = VisibleMetrics(s, false, false);  // ...but there is no GPU
+    s.showCpu = s.showRam = s.showDisk = false;                    // only GPU metrics enabled...
+    const auto visible = VisibleMetrics(s, {false, false, true});  // ...but there is no GPU
     CHECK_EQ(visible.size(), size_t{1});
     CHECK(visible[0] == MetricId::Cpu);
 }
 
 TEST(Cannot_hide_the_last_available_metric) {
     Settings s;
-    s.showRam = false;
+    s.showRam = s.showDisk = false;
     // GPU unavailable: CPU is the last real metric even though GPU/VRAM are still "enabled".
-    CHECK(!CanHide(s, MetricId::Cpu, false, false));
-    CHECK(CanHide(s, MetricId::Cpu, true, true));
+    CHECK(!CanHide(s, MetricId::Cpu, {false, false, false}));
+    CHECK(CanHide(s, MetricId::Cpu, {true, true, false}));
     s.showGpu = s.showVram = false;
-    CHECK(!CanHide(s, MetricId::Cpu, true, true));
-    CHECK(CanHide(s, MetricId::Ram, true, true));  // hiding something already hidden is harmless
+    CHECK(!CanHide(s, MetricId::Cpu, {true, true, true}));
+    CHECK(CanHide(s, MetricId::Ram, {true, true, true}));  // hiding something already hidden is harmless
+    s.showDisk = true;
+    CHECK(CanHide(s, MetricId::Cpu, {false, false, true}));  // the disk remains
+}
+
+TEST(Temperature_levels) {
+    CHECK_EQ(TemperatureLevel(MetricId::Cpu, 60.0), 0);
+    CHECK_EQ(TemperatureLevel(MetricId::Cpu, 85.0), 1);
+    CHECK_EQ(TemperatureLevel(MetricId::Gpu, 94.9), 1);
+    CHECK_EQ(TemperatureLevel(MetricId::Gpu, 95.0), 2);
+    CHECK_EQ(TemperatureLevel(MetricId::Disk, 45.0), 0);  // drives run cooler...
+    CHECK_EQ(TemperatureLevel(MetricId::Disk, 60.0), 1);  // ...and get worried much earlier
+    CHECK_EQ(TemperatureLevel(MetricId::Disk, 71.0), 2);
 }

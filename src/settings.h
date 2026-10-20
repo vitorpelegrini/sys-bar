@@ -15,6 +15,8 @@ struct Settings {
     bool showRam = true;
     bool showGpu = true;
     bool showVram = true;
+    bool showDisk = true;
+    bool showTemperatures = true;  // temperature badges in the strip
     bool colorByLoad = true;
     bool clickOpensTaskManager = true;
     DWORD intervalMs = 1000;

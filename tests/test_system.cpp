@@ -96,11 +96,18 @@ TEST(Sampler_delivers_valid_samples) {
     CHECK(!info.cpuName.empty());
     CHECK_EQ(info.logicalCpus, GetActiveProcessorCount(ALL_PROCESSOR_GROUPS));
 
+    CHECK(s.diskAvailable);  // every machine has a disk
+    CHECK(s.diskActive >= 0.0 && s.diskActive <= 100.0);
+    if (s.gpuTemperature) CHECK(*s.gpuTemperature > 0.0 && *s.gpuTemperature < 150.0);
     if (s.gpuAvailable) {
         CHECK(s.gpu >= 0.0 && s.gpu <= 100.0);
         CHECK(s.vramUsed <= s.vramTotal || s.vramTotal == 0);
         CHECK(!info.gpuName.empty());
     }
+    std::printf("      disk %.1f%% (read %.2f / write %.2f MB/s) | gpu temp %s | gpu fan %s rpm\n", s.diskActive,
+                s.diskReadBps / 1048576.0, s.diskWriteBps / 1048576.0,
+                s.gpuTemperature ? std::to_string(*s.gpuTemperature).c_str() : "n/a",
+                s.gpuFanRpm ? std::to_string(*s.gpuFanRpm).c_str() : "n/a");
     std::printf("      cpu %.1f%% | ram %.1f/%.1f GB | gpu [%s] %.1f%% | vram %.2f/%.1f GB\n", s.cpu,
                 s.ramUsed / 1073741824.0, s.ramTotal / 1073741824.0, t::Narrow(info.gpuName).c_str(), s.gpu,
                 s.vramUsed / 1073741824.0, s.vramTotal / 1073741824.0);
@@ -187,6 +194,8 @@ TEST(Settings_round_trip) {
     Settings a;
     a.showRam = false;
     a.showVram = false;
+    a.showDisk = false;
+    a.showTemperatures = false;
     a.colorByLoad = false;
     a.clickOpensTaskManager = false;
     a.intervalMs = 2000;
@@ -199,6 +208,8 @@ TEST(Settings_round_trip) {
     CHECK(!b.showRam);
     CHECK(b.showGpu);
     CHECK(!b.showVram);
+    CHECK(!b.showDisk);
+    CHECK(!b.showTemperatures);
     CHECK(!b.colorByLoad);
     CHECK(!b.clickOpensTaskManager);
     CHECK_EQ(b.intervalMs, 2000ul);
@@ -212,7 +223,7 @@ TEST(Settings_fix_absurd_values) {
     const std::wstring file = temp.File();
     WritePrivateProfileStringW(L"sys-bar", L"IntervalMs", L"5", file.c_str());
     WritePrivateProfileStringW(L"sys-bar", L"OffsetDip", L"-50", file.c_str());
-    for (const wchar_t* key : {L"ShowCpu", L"ShowRam", L"ShowGpu", L"ShowVram"}) {
+    for (const wchar_t* key : {L"ShowCpu", L"ShowRam", L"ShowGpu", L"ShowVram", L"ShowDisk"}) {
         WritePrivateProfileStringW(L"sys-bar", key, L"0", file.c_str());
     }
     WritePrivateProfileStringW(L"sys-bar", L"Language", L"", file.c_str());
