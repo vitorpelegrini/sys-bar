@@ -115,6 +115,8 @@ TEST(Rates_links_durations_and_watts) {
     CHECK_EQ(HoursMinutes(2 * 3600 + 5 * 60), std::wstring(L"2 h 05 min"));
     CHECK_EQ(HoursMinutes(-5), std::wstring(L"0 min"));
     CHECK_EQ(Watts(12.4, L','), std::wstring(L"+12 W"));
+    CHECK_EQ(Watts(0.0, L','), std::wstring(L"0 W"));  // never "-0,0 W"
+    CHECK_EQ(Watts(-0.01, L','), std::wstring(L"0 W"));
     CHECK_EQ(Watts(-8.44, L','), std::wstring(L"\u22128,4 W"));
 }
 

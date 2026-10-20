@@ -49,7 +49,7 @@ constexpr int kModernGapDip = 4;                       // space between the stri
 constexpr int kModernFallbackRightDip = 380;           // used only when the tray area cannot be located
 constexpr int kModernSecondaryFallbackRightDip = 160;  // other monitors: clock and notifications only
 constexpr ULONGLONG kTrayProbeIntervalMs = 60'000;     // the right-side controls are measured again...
-constexpr ULONGLONG kTrayProbeTimeoutMs = 30'000;      // ...and a stuck measurement is abandoned
+constexpr ULONGLONG kTrayProbeRetryMs = 10'000;        // ...or sooner when it could not be measured
 constexpr size_t kMaxTaskListMoves = 12;               // tug-of-war guard against Explorer...
 constexpr ULONGLONG kTaskListMoveWindowMs = 2000;      // ...per time window
 constexpr DWORD kWindows11Build = 22000;
@@ -107,7 +107,9 @@ void Log(const wchar_t* format, ...) {
     int n = swprintf_s(buffer, L"[sys-bar] ");
     va_list args;
     va_start(args, format);
-    vswprintf_s(buffer + n, std::size(buffer) - n, format, args);
+    // Truncate instead of invoking the invalid-parameter handler (which would end the process) on long
+    // texts; one character is kept for the newline.
+    _vsnwprintf_s(buffer + n, std::size(buffer) - n - 1, _TRUNCATE, format, args);
     va_end(args);
     wcscat_s(buffer, L"\n");
     OutputDebugStringW(buffer);
@@ -386,17 +388,25 @@ void App::RestoreTaskList(Taskbar& t) {
 
 void App::Detach(Taskbar& t, bool restoreTaskbar) {
     if (restoreTaskbar) RestoreTaskList(t);
-    if (t.bar == hoverBar_ || t.bar == pressedBar_) {
-        hoverBar_ = pressedBar_ = nullptr;
+    if (t.bar && t.bar == hoverBar_) {
+        hoverBar_ = nullptr;
         HideCard();
     }
+    if (t.bar && t.bar == pressedBar_) pressedBar_ = nullptr;
+    if (t.bar && t.bar == noticeBar_) noticeBar_ = nullptr;
     if (t.bar && IsWindow(t.bar)) DestroyWindow(t.bar);
     t.bar = nullptr;
 }
 
 void App::DetachAll(bool restoreTaskbar) {
-    for (auto& t : bars_) Detach(*t, restoreTaskbar);
+    // Detaching calls into Explorer (task list, window destruction), which may deliver messages to us:
+    // take the strips out of bars_ first, so a nested call never sees half-destroyed entries.
+    inTaskbarWork_ = true;
+    std::vector<std::unique_ptr<Taskbar>> bars = std::move(bars_);
     bars_.clear();
+    for (auto& t : bars) Detach(*t, restoreTaskbar);
+    bars.clear();
+    inTaskbarWork_ = false;
     for (auto& [thread, hook] : hooks_) UnhookWinEvent(hook);
     hooks_.clear();
     UpdateCrashRestore();
@@ -407,7 +417,7 @@ void App::DetachAll(bool restoreTaskbar) {
         cardVisible_ = cardWanted_ = false;
         cardAlpha_ = 0.0f;
     }
-    hoverBar_ = pressedBar_ = nullptr;
+    hoverBar_ = pressedBar_ = noticeBar_ = nullptr;
     accessibleName_.clear();
 }
 
@@ -419,8 +429,18 @@ bool App::IsAttached(const Taskbar& t) const {
 }
 
 App::Taskbar* App::FindBar(HWND bar) {
+    if (!bar) return nullptr;  // destroyed strips keep a null handle until the next pass
     for (auto& t : bars_) {
         if (t->bar == bar) return t.get();
+    }
+    return nullptr;
+}
+
+App::Taskbar* App::CardBar() {
+    if (Taskbar* t = FindBar(hoverBar_)) return t;
+    if (Taskbar* t = FindBar(noticeBar_)) return t;
+    for (auto& t : bars_) {
+        if (t->primary && t->bar) return t.get();
     }
     return nullptr;
 }
@@ -439,17 +459,22 @@ void App::SyncTaskbars() {
         return std::any_of(wanted.begin(), wanted.end(), [&](const auto& w) { return w.first == tray; });
     };
 
-    // Strips whose taskbar went away (monitor unplugged, Explorer restarted, option turned off).
+    // Strips whose taskbar went away (monitor unplugged, Explorer restarted, option turned off). They leave
+    // bars_ before being detached: detaching calls into Explorer, which may deliver messages to us.
+    std::vector<std::unique_ptr<Taskbar>> gone;
     for (auto it = bars_.begin(); it != bars_.end();) {
-        Taskbar& t = **it;
-        if (IsAttached(t) && isWanted(t.tray)) {
+        if (IsAttached(**it) && isWanted((*it)->tray)) {
             ++it;
-            continue;
+        } else {
+            gone.push_back(std::move(*it));
+            it = bars_.erase(it);
         }
-        // Give the task list its space back only when it still exists (not after an Explorer crash).
-        Detach(t, IsWindow(t.container) && IsWindow(t.taskList));
-        it = bars_.erase(it);
     }
+    for (auto& t : gone) {
+        // Give the task list its space back only when it still exists (not after an Explorer crash).
+        Detach(*t, IsWindow(t->container) && IsWindow(t->taskList));
+    }
+    gone.clear();
     // Unhook threads that no longer own any taskbar (Explorer restarted).
     for (auto it = hooks_.begin(); it != hooks_.end();) {
         const bool used = std::any_of(bars_.begin(), bars_.end(), [&](const auto& t) {
@@ -487,13 +512,21 @@ void App::RequestReposition() {
 void App::Reposition() {
     repositionPending_ = false;
     if (quitting_ || !snapshot_.valid || displayOff_ || locked_) return;
+    // Moving Explorer's windows is a synchronous cross-thread call: messages sent to us meanwhile (an
+    // Explorer restart, a setting change) must not rebuild bars_ under our feet. Run once more later.
+    if (inTaskbarWork_) {
+        RequestReposition();
+        return;
+    }
+    inTaskbarWork_ = true;
     SyncTaskbars();
     RebuildItems();
     bool cardBarMoved = false;
     for (auto& t : bars_) {
-        if (RepositionBar(*t) && t->bar == hoverBar_) cardBarMoved = true;
+        if (t->bar && RepositionBar(*t) && t->bar == hoverBar_) cardBarMoved = true;
     }
     UpdateCrashRestore();
+    inTaskbarWork_ = false;
     if (cardBarMoved && cardVisible_) UpdateCard(true);  // the card follows the strip
 }
 
@@ -534,6 +567,10 @@ bool App::RepositionBar(Taskbar& t) {
             } else {
                 Log(L"task list keeps being reset by Explorer; backing off");
             }
+        } else {
+            // Already at our size: maybe left that way by a previous instance that was killed. It is ours
+            // to give back on exit all the same.
+            t.shrunk = !SameRect(placed.taskList, placed.natural);
         }
         target = placed.strip;
     } else {
@@ -587,8 +624,10 @@ void App::ProbeTrayEdge(Taskbar& t) {
     GetWindowRect(t.tray, &tray);
     const int width = tray.right - tray.left;
     const ULONGLONG now = GetTickCount64();
-    if (t.probing && now - t.probeStarted < kTrayProbeTimeoutMs) return;
-    if (t.reservePx >= 0 && width == t.probedWidth && now - t.probeStarted < kTrayProbeIntervalMs) return;
+    if (t.probing) return;  // never two measurements of one taskbar at once (the probe has its own timeouts)
+    // Measured again when the taskbar changes size and once a minute; after a failure, every 10 s.
+    const ULONGLONG interval = t.reservePx >= 0 ? kTrayProbeIntervalMs : kTrayProbeRetryMs;
+    if (t.probeStarted && width == t.probedWidth && now - t.probeStarted < interval) return;
     t.probing = true;
     t.probeStarted = now;
     t.probedWidth = width;
@@ -716,7 +755,7 @@ void App::RebuildItems() {
                 bool& seen = tracks_[Key(id)].badgeSeen;  // power in watts, when the driver reports it
                 seen = seen || b.watts.has_value();
                 if (seen) {
-                    item.worstBadge = L"\u221299 W";
+                    item.worstBadge = L"\u2212999 W";
                     if (b.watts) item.badge = text::Watts(*b.watts, decimal_);
                 }
                 items_.push_back(std::move(item));
@@ -924,12 +963,8 @@ CardModel App::BuildCardModel() const {
 
     CardModel model;
     model.title = S(i18n::Str::CardTitle);
-    model.window =
-        text::Chip(icon::kClock, text::HistoryWindow(static_cast<unsigned>(kHistory), settings_.intervalMs,
-                                                     S(i18n::Str::CardLastSeconds), S(i18n::Str::CardLastMinutes)));
-    model.hintLeft =
-        settings_.clickOpensTaskManager ? text::Chip(icon::kTaskManager, S(i18n::Str::CardHintClick)) : L"";
-    model.hintRight = text::Chip(icon::kOptions, S(i18n::Str::CardHintMenu));
+    model.footerLeft = text::Chip(icon::kInfo, L"sys-bar " SYSBAR_VERSION_WTEXT);
+    FooterUpdateStatus(model);
     model.capacity = static_cast<int>(kHistory);
 
     auto row = [&](MetricId id, int key, const std::wstring& title) {
@@ -964,13 +999,13 @@ CardModel App::BuildCardModel() const {
     };
 
     percentRow(MetricId::Cpu, Key(MetricId::Cpu), S(i18n::Str::CardCpu), s.cpu,
-               text::JoinChips({text::Chip(icon::kChip, cpuDisplayName_),
+               text::JoinChips({(cpuDisplayName_.empty() ? std::wstring() : text::Chip(icon::kChip, cpuDisplayName_)),
                                 text::Chip(icon::kThreads, text::Format(S(i18n::Str::CardThreads),
                                                                         {std::to_wstring(info.logicalCpus)}))}));
     memoryRow(MetricId::Ram, S(i18n::Str::CardMemory), s.ramUsed, s.ramTotal);
     if (s.gpuAvailable) {
         percentRow(MetricId::Gpu, Key(MetricId::Gpu), S(i18n::Str::CardGpu), s.gpu,
-                   text::Chip(icon::kDisplay, info.gpuName));
+                   (info.gpuName.empty() ? std::wstring() : text::Chip(icon::kDisplay, info.gpuName)));
         if (s.vramTotal > 0) memoryRow(MetricId::Vram, S(i18n::Str::CardGpuMemory), s.vramUsed, s.vramTotal);
     }
     const logic::Availability available = Available();
@@ -1070,11 +1105,15 @@ CardModel App::BuildCardModel() const {
     size_t gpus = 0;
     for (const SensorReading& r : s.sensors) gpus += r.group == SensorGroup::Gpu && r.kind == SensorKind::Temperature;
     size_t gpuIndex = 0;
-    for (const SensorReading& r : s.sensors) {
+    for (size_t i = 0; i < s.sensors.size(); ++i) {
+        const SensorReading& r = s.sensors[i];
         if (r.group != SensorGroup::Gpu || r.kind != SensorKind::Temperature) continue;
         std::wstring title = gpus > 1 ? L"GPU " + std::to_wstring(++gpuIndex) : L"GPU";
         CardSensorLine tile = temperatureTile(MetricId::Gpu, std::move(title), r.value);
-        for (const SensorReading& f : s.sensors) {
+        // The sampler lists each adapter's fan right after its temperature: two identical cards
+        // (same name) never get each other's fan.
+        if (i + 1 < s.sensors.size()) {
+            const SensorReading& f = s.sensors[i + 1];
             if (f.group == SensorGroup::Gpu && f.kind == SensorKind::Fan && f.name == r.name)
                 join(tile.detail, rpm(f.value));
         }
@@ -1114,23 +1153,8 @@ CardModel App::BuildCardModel() const {
     }
     if (!model.sensors.empty() || !model.sensorsHint.empty()) model.sensorsTitle = S(i18n::Str::CardSensors);
 
-    // Notice: a message the user asked for (e.g. "you have the latest version"), else update news.
-    if (!notice_.empty() && GetTickCount64() < noticeUntil_) {
-        model.notice = notice_;
-    } else if (const auto release = updater_.latest()) {
-        const std::wstring version = update::ToString(release->version);
-        switch (updater_.state()) {
-            case update::State::Available:
-                model.notice = text::Chip(icon::kUpdate, text::Format(S(i18n::Str::CardUpdateAvailable), {version}));
-                break;
-            case update::State::Downloading:
-            case update::State::Ready:
-            case update::State::Installing:
-                model.notice = text::Format(S(i18n::Str::UpdateDownloading), {version});
-                break;
-            default: break;
-        }
-    }
+    // Notice: a short-lived message the user asked for (e.g. advanced sensors turned on).
+    if (!notice_.empty() && GetTickCount64() < noticeUntil_) model.notice = notice_;
     return model;
 }
 
@@ -1141,9 +1165,9 @@ void App::PresentCard() {
     card_.Present(cardWindow_, at, static_cast<BYTE>(std::lround(255.0f * eased)));
 }
 
-void App::UpdateCard(bool reposition) {
-    const Taskbar* t = FindBar(hoverBar_);
-    if (!cardWindow_ || !t) return;
+bool App::UpdateCard(bool reposition) {
+    const Taskbar* t = CardBar();
+    if (!cardWindow_ || !t) return false;
     const CardModel model = BuildCardModel();
     MONITORINFO mi{sizeof(mi)};
     GetMonitorInfoW(MonitorFromWindow(t->bar, MONITOR_DEFAULTTONEAREST), &mi);
@@ -1151,12 +1175,18 @@ void App::UpdateCard(bool reposition) {
     const int gapPx = MulDiv(kCardGapDip, dpi, USER_DEFAULT_SCREEN_DPI);
     // The card must fit between the taskbar and the other edge of the screen (the work area).
     const int room = mi.rcWork.bottom - mi.rcWork.top;
-    const SIZE size = card_.Measure(t->layout.dpi, model, std::max(room - 2 * gapPx, 200));
-    if (!card_.Paint(model)) {
+    const int roomWide = mi.rcWork.right - mi.rcWork.left;
+    const SIZE size =
+        card_.Measure(t->layout.dpi, model, std::max(room - 2 * gapPx, 200), std::max(roomWide - 2 * gapPx, 200));
+    // A recreated render target (display driver reset) fails once: retry like the strip does.
+    if (!card_.Paint(model) && !card_.Paint(model)) {
         Log(L"card paint failed");
-        return;
+        return false;
     }
 
+    // Live values change the card's size: place it again so it never grows over the taskbar.
+    if (size.cx != cardSize_.cx || size.cy != cardSize_.cy) reposition = true;
+    cardSize_ = size;
     if (reposition) {
         logic::CardInput in;
         GetWindowRect(t->bar, &in.strip);
@@ -1171,14 +1201,18 @@ void App::UpdateCard(bool reposition) {
         cardSlide_ = placed.slide;
     }
     PresentCard();
+    return true;
 }
 
 void App::ShowCard() {
-    if (!cardWindow_ || !FindBar(hoverBar_) || !snapshot_.valid) return;
+    if (!cardWindow_ || !CardBar() || !snapshot_.valid) return;
     cardWanted_ = true;
     if (!cardVisible_) {
         cardAlpha_ = AnimationsAllowed() ? 0.0f : 1.0f;
-        UpdateCard(true);
+        if (!UpdateCard(true)) {
+            cardWanted_ = false;
+            return;
+        }
         SetWindowPos(cardWindow_, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
         cardVisible_ = true;
     }
@@ -1236,20 +1270,41 @@ void App::OnUpdateState(update::State state) {
             }
             if (manualUpdateCheck_) {
                 manualUpdateCheck_ = false;
-                ShowNotice(state == State::Available
-                               ? text::Format(S(i18n::Str::CardUpdateAvailable), {version})
-                               : text::Format(S(i18n::Str::UpdateUpToDate), {SYSBAR_VERSION_WTEXT}));
+                ShowNotice({});  // the footer shows the result
             }
             break;
         case State::Ready: MaybeInstallUpdate(); break;
         case State::Failed:
             Log(L"update failed");
-            if (manualUpdateCheck_ || installWhenReady_) ShowNotice(S(i18n::Str::UpdateFailed));
+            if (manualUpdateCheck_ || installWhenReady_) ShowNotice({});
             manualUpdateCheck_ = installWhenReady_ = false;
             break;
         default: break;
     }
     if (cardVisible_) UpdateCard(false);
+}
+
+// Update status for the card's footer: the result of the last check, or what is going on now.
+void App::FooterUpdateStatus(CardModel& model) const {
+    using update::State;
+    const auto release = updater_.latest();
+    const std::wstring version = release ? update::ToString(release->version) : L"";
+    switch (updater_.state()) {
+        case State::Checking: model.footerRight = text::Chip(icon::kSync, S(i18n::Str::UpdateChecking)); break;
+        case State::Available:
+            model.footerRight = text::Chip(icon::kUpdate, text::Format(S(i18n::Str::CardUpdateAvailable), {version}));
+            model.footerAccent = true;
+            break;
+        case State::Downloading:
+        case State::Ready:
+        case State::Installing:
+            model.footerRight = text::Chip(icon::kUpdate, text::Format(S(i18n::Str::UpdateDownloading), {version}));
+            model.footerAccent = true;
+            break;
+        case State::Failed: model.footerRight = text::Chip(icon::kWarning, S(i18n::Str::UpdateFailed)); break;
+        case State::UpToDate: model.footerRight = text::Chip(icon::kCheck, S(i18n::Str::CardUpToDate)); break;
+        default: break;  // never checked (or checks turned off): nothing to say
+    }
 }
 
 // Installs a downloaded update at a quiet moment: never while the user is looking at the card.
@@ -1262,6 +1317,9 @@ void App::MaybeInstallUpdate() {
 
 void App::ShowNotice(std::wstring text) {
     notice_ = std::move(text);
+    // The mouse may be anywhere (e.g. the result of "check for updates" arrives later): show it above
+    // the strip the user last used, or the main one.
+    if (!hoverBar_) noticeBar_ = pressedBar_ ? pressedBar_ : noticeBar_;
     noticeUntil_ = GetTickCount64() + kNoticeMs;
     if (cardVisible_) {
         UpdateCard(false);
@@ -1368,7 +1426,7 @@ void App::ShowMenu(HWND bar, POINT screen) {
     AppendMenuW(disks, MF_STRING, kCmdDisksCombined, S(i18n::Str::MenuDisksCombined));
     CheckMenuRadioItem(disks, kCmdDisksEach, kCmdDisksCombined,
                        settings_.disksSeparate ? kCmdDisksEach : kCmdDisksCombined, MF_BYCOMMAND);
-    const bool severalDisks = snapshot_.disks.size() > 1;
+    const bool severalDisks = snapshot_.disks.size() > 1 && snapshot_.disks.size() <= logic::kMaxDiskColumns;
     AppendMenuW(menu, MF_POPUP | (severalDisks && settings_.showDisk ? 0u : static_cast<UINT>(MF_GRAYED)),
                 reinterpret_cast<UINT_PTR>(disks), S(i18n::Str::MenuDisks));
 
@@ -1405,7 +1463,7 @@ void App::ShowMenu(HWND bar, POINT screen) {
             AppendMenuW(roles, MF_STRING, base,
                         text::Format(S(i18n::Str::MenuFanAuto), {FanRoleName(reading->role, reading->name)}).c_str());
             AppendMenuW(roles, MF_SEPARATOR, 0, nullptr);
-            for (FanRole role : {FanRole::Cpu, FanRole::Case, FanRole::Pump, FanRole::Psu}) {
+            for (FanRole role : {FanRole::Cpu, FanRole::Gpu, FanRole::Case, FanRole::Pump, FanRole::Psu}) {
                 AppendMenuW(roles, MF_STRING, base + static_cast<UINT>(role), FanRoleName(role, reading->name).c_str());
             }
             CheckMenuRadioItem(roles, base, base + static_cast<UINT>(FanRole::Psu), base + static_cast<UINT>(chosen),
@@ -1658,8 +1716,9 @@ LRESULT CALLBACK App::BarProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 LRESULT App::HandleController(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == taskbarCreated_ && taskbarCreated_ != 0) {
-        // Explorer restarted (or re-broadcast this message): strips whose taskbar is gone are rebuilt.
-        Reposition();
+        // Explorer restarted (or re-broadcast this message): strips whose taskbar is gone are rebuilt. Posted,
+        // never run here: this may arrive while we are in the middle of moving Explorer's windows.
+        RequestReposition();
         return 0;
     }
 
@@ -1803,7 +1862,11 @@ LRESULT App::HandleBar(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     t->shown = t->tracking = false;
                 }
             }
-            if (hoverBar_ == hwnd) hoverBar_ = nullptr;
+            if (hoverBar_ == hwnd) {
+                hoverBar_ = nullptr;
+                HideCard();
+            }
+            if (noticeBar_ == hwnd) noticeBar_ = nullptr;
             if (pressedBar_ == hwnd) pressedBar_ = nullptr;
             break;
     }

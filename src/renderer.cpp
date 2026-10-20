@@ -252,6 +252,7 @@ uint64_t Renderer::Signature(const std::vector<ItemView>& items, bool hover) con
         const int fill = static_cast<int>(std::lround(std::clamp(item.fraction, 0.0f, 1.0f) * blocks_[i].w /
                                                       blocks_[i].contentScale * scale_ * 2.0f));
         h.Add(fill);
+        h.Add(item.fraction > 0.001f);  // Paint draws a minimum dot for any tiny value
         h.Add(theme_.colorByLoad ? LoadLevel(item.load) : 0);
     }
     return h.h == 0 ? 1 : h.h;

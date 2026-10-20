@@ -251,7 +251,8 @@ TEST(Settings_fix_absurd_values) {
     const std::wstring file = temp.File();
     WritePrivateProfileStringW(L"sys-bar", L"IntervalMs", L"5", file.c_str());
     WritePrivateProfileStringW(L"sys-bar", L"OffsetDip", L"-50", file.c_str());
-    for (const wchar_t* key : {L"ShowCpu", L"ShowRam", L"ShowGpu", L"ShowVram", L"ShowDisk"}) {
+    for (const wchar_t* key :
+         {L"ShowCpu", L"ShowRam", L"ShowGpu", L"ShowVram", L"ShowDisk", L"ShowNet", L"ShowBattery"}) {
         WritePrivateProfileStringW(L"sys-bar", key, L"0", file.c_str());
     }
     WritePrivateProfileStringW(L"sys-bar", L"Language", L"", file.c_str());

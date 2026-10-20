@@ -142,6 +142,7 @@ std::wstring HoursMinutes(int seconds) {
 }
 
 std::wstring Watts(double watts, wchar_t decimal) {
+    if (!std::isfinite(watts) || std::fabs(watts) < 0.05) return L"0 W";  // never "-0,0 W"
     const double magnitude = std::fabs(watts);
     const std::wstring number = magnitude < 9.95 ? Fixed1(magnitude, decimal)
                                                  : std::to_wstring(static_cast<long long>(std::llround(magnitude)));

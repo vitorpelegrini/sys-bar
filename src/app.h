@@ -84,6 +84,7 @@ private:
     bool IsAttached(const Taskbar& t) const;
     void SyncTaskbars();
     Taskbar* FindBar(HWND bar);
+    Taskbar* CardBar();  // the strip the card belongs to: hovered, else the notice's, else the main one
     void RequestReposition();
     void Reposition();
     bool RepositionBar(Taskbar& t);  // true when the strip moved
@@ -113,7 +114,7 @@ private:
     CardModel BuildCardModel() const;
     void ShowCard();
     void HideCard();
-    void UpdateCard(bool reposition);
+    bool UpdateCard(bool reposition);
     void PresentCard();
     void OnCardFadeTick();
 
@@ -123,6 +124,7 @@ private:
     void MaybeInstallUpdate();
     void ShowNotice(std::wstring text);
     std::wstring UpdateStatusText() const;
+    void FooterUpdateStatus(CardModel& model) const;
 
     // Advanced sensors (optional service)
     std::wstring SensorsTool() const;  // path of sys-bar-sensors.exe next to us, or empty
@@ -142,8 +144,11 @@ private:
     std::vector<std::unique_ptr<Taskbar>> bars_;
     std::unordered_map<DWORD, HWINEVENTHOOK> hooks_;  // per taskbar thread
     UINT taskbarCreated_ = 0;
-    HWND hoverBar_ = nullptr;    // strip under the mouse (the card belongs to it)
-    HWND pressedBar_ = nullptr;  // strip where the left button went down
+    HWND hoverBar_ = nullptr;     // strip under the mouse (the card belongs to it)
+    HWND pressedBar_ = nullptr;   // strip where the left button went down
+    HWND noticeBar_ = nullptr;    // strip a notice is shown above when the mouse is elsewhere
+    bool inTaskbarWork_ = false;  // Reposition/DetachAll running: re-entrant calls are deferred
+    SIZE cardSize_{};             // last card size: a change moves the card
     bool animating_ = false;
     bool repositionPending_ = false;
     bool quitting_ = false;

@@ -124,10 +124,9 @@ CardModel DemoCard(i18n::Lang lang) {
 
     CardModel model;
     model.title = S(Str::CardTitle);
-    model.window =
-        text::Chip(icon::kClock, text::HistoryWindow(60, 1000, S(Str::CardLastSeconds), S(Str::CardLastMinutes)));
-    model.hintLeft = text::Chip(icon::kTaskManager, S(Str::CardHintClick));
-    model.hintRight = text::Chip(icon::kOptions, S(Str::CardHintMenu));
+    model.footerLeft = text::Chip(icon::kInfo, L"sys-bar 1.0.0");
+    model.footerRight = text::Chip(icon::kUpdate, text::Format(S(Str::CardUpdateAvailable), {L"1.1.0"}));
+    model.footerAccent = true;
     auto row = [&](MetricId id, std::wstring title, std::wstring value, std::wstring sub, std::wstring peak, float base,
                    float amp, float freq) {
         CardRow r;
@@ -176,7 +175,6 @@ CardModel DemoCard(i18n::Lang lang) {
         {L"SSD D:", L"72 °C", L"TGT-SLST-120", 0.87f, 2, MetricId::Disk, false},
         {S(Str::CardFanCase), rpm(L"1205"), L"Fan #1", -1.0f, 0, MetricId::Cpu, true},
     };
-    model.notice = text::Chip(icon::kUpdate, text::Format(S(Str::CardUpdateAvailable), {L"1.1.0"}));
     return model;
 }
 
@@ -337,10 +335,10 @@ TEST(Card_grows_for_long_translations) {
     CardModel model = DemoCard(i18n::Lang::English);
     card.Measure(96, model);
     const float normal = card.WidthDip();
-    model.hintLeft = L"A very long hint text that would never fit in the default width";
+    model.footerLeft = L"A very long hint text that would never fit in the default width";
     card.Measure(96, model);
     CHECK(card.WidthDip() > normal);
-    CHECK(card.WidthDip() <= 460.0f);  // but never absurdly wide
+    CHECK(card.WidthDip() <= 540.0f);  // but never absurdly wide (beyond that, text wraps)
 }
 
 TEST(Card_renders_in_every_language) {

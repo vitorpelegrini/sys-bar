@@ -90,7 +90,7 @@ void Settings::Load() {
     wchar_t lang[32] = {};
     GetPrivateProfileStringW(kSection, L"Language", language.c_str(), lang, 32, file.c_str());
     language = lang[0] ? lang : L"auto";
-    if (!showCpu && !showRam && !showGpu && !showVram && !showDisk) showCpu = true;
+    if (!showCpu && !showRam && !showGpu && !showVram && !showDisk && !showNet && !showBattery) showCpu = true;
 }
 
 void Settings::Save() const {

@@ -143,7 +143,7 @@ ComPtr<IDWriteTextLayout> Card::Text(const std::wstring& text, float size, DWRIT
     return layout;
 }
 
-SIZE Card::Measure(UINT dpi, const CardModel& model, int maxHeightPx) {
+SIZE Card::Measure(UINT dpi, const CardModel& model, int maxHeightPx, int maxWidthPx) {
     scale_ = static_cast<float>(std::max<UINT>(dpi, 96)) / 96.0f;
 
     // Widest line decides the width (translations vary a lot in length).
@@ -166,9 +166,10 @@ SIZE Card::Measure(UINT dpi, const CardModel& model, int maxHeightPx) {
         needed = std::max(needed, kIndent + width(row.subtitle, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL) + kSubToPeak +
                                       width(row.peak, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL));
     }
-    const float hintLeft = width(model.hintLeft, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
-    const float hintRight = width(model.hintRight, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
-    needed = std::max(needed, hintLeft + hintRight + (hintLeft > 0 && hintRight > 0 ? kMinGap : 0.0f));
+    const float footerLeft = width(model.footerLeft, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
+    const float footerRight = width(model.footerRight, kSmallSize,
+                                    model.footerAccent ? DWRITE_FONT_WEIGHT_SEMI_BOLD : DWRITE_FONT_WEIGHT_NORMAL);
+    needed = std::max(needed, footerLeft + footerRight + (footerLeft > 0 && footerRight > 0 ? kMinGap : 0.0f));
     float tileNeed = 0.0f;  // widest tile, everything at full length
     for (const CardSensorLine& tile : model.sensors) {
         tileNeed =
@@ -251,9 +252,17 @@ SIZE Card::Measure(UINT dpi, const CardModel& model, int maxHeightPx) {
     const float maxHeight = maxHeightPx > 0 ? static_cast<float>(maxHeightPx) / scale_ : 0.0f;
     height_ = layoutAt(natural, kSparkHeight, kRowGap);
     if (maxHeight > 0.0f && height_ > maxHeight) {
+        // Wider only within the screen, and only kept when it actually saves height.
+        const float widest = maxWidthPx > 0 ? static_cast<float>(maxWidthPx) / scale_ - 2.0f * kShadow : kWideWidth;
         for (float wider : {kMaxWidth, kWideWidth}) {
+            wider = std::min(wider, widest);
             if (wider <= width_) continue;
+            const float previousWidth = width_, previousHeight = height_;
             height_ = layoutAt(wider, kSparkHeight, kRowGap);
+            if (height_ >= previousHeight) {
+                height_ = layoutAt(previousWidth, kSparkHeight, kRowGap);
+                break;
+            }
             if (height_ <= maxHeight) break;
         }
         if (height_ > maxHeight && !lines_.empty()) {
@@ -598,20 +607,18 @@ bool Card::Paint(const CardModel& model) {
         y = base;
     }
 
-    // Footer with usage hints.
+    // Footer: version on the left, update status on the right (in the accent color when there is news).
     const float sep = Snap(y + kFooterGap) + 0.5f / scale_;
     brush_->SetColor(Ink(theme_, 0.08f));
     target_->DrawLine(D2D1::Point2F(card.left + 1.0f, sep), D2D1::Point2F(card.right - 1.0f, sep), brush_.Get(),
                       1.0f / scale_);
-    const float hintBase = sep + kSepToHint + kSmallSize * kCap;
-    if (!model.hintLeft.empty()) {
-        DrawText(Text(model.hintLeft, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL).Get(), left, hintBase, faint);
-        DrawTextRight(Text(model.hintRight, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL).Get(), right, hintBase, faint);
-    } else {
-        // Only one hint left: center it.
-        auto hint = Text(model.hintRight, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
-        if (hint) DrawText(hint.Get(), (left + right - TextWidth(hint.Get())) / 2.0f, hintBase, faint);
-    }
+    const float footerBase = sep + kSepToHint + kSmallSize * kCap;
+    DrawText(Text(model.footerLeft, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL).Get(), left, footerBase, faint);
+    const D2D1_COLOR_F accent = MetricColor(MetricId::Cpu, 0.0f, theme_);
+    DrawTextRight(Text(model.footerRight, kSmallSize,
+                       model.footerAccent ? DWRITE_FONT_WEIGHT_SEMI_BOLD : DWRITE_FONT_WEIGHT_NORMAL)
+                      .Get(),
+                  right, footerBase, model.footerAccent ? accent : faint);
 
     const HRESULT hr = target_->EndDraw();
     if (hr == D2DERR_RECREATE_TARGET) {

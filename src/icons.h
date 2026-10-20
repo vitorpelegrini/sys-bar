@@ -23,6 +23,10 @@ constexpr wchar_t kThermometer = 0xE9CA;
 constexpr wchar_t kOptions = 0xE9F5;  // gears
 constexpr wchar_t kTaskManager = 0xE9D9;
 constexpr wchar_t kUpdate = 0xE896;
+constexpr wchar_t kInfo = 0xE946;
+constexpr wchar_t kSync = 0xE895;
+constexpr wchar_t kCheck = 0xE73E;
+constexpr wchar_t kWarning = 0xE7BA;
 
 constexpr bool IsIcon(wchar_t c) {
     return c >= 0xE000 && c <= 0xF8FF;

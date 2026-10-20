@@ -102,6 +102,7 @@ enum class Str {
     MenuFans,
     MenuFanAuto,
     MenuAllTaskbars,
+    CardUpToDate,
     Count,
 };
 

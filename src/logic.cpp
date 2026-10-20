@@ -206,14 +206,16 @@ std::wstring FormatFanRoles(const std::vector<std::pair<std::wstring, FanRole>>&
     return out;
 }
 
-std::wstring WithFanRole(const std::wstring& text, const std::wstring& name, FanRole role) {
+std::wstring WithFanRole(const std::wstring& text, const std::wstring& rawName, FanRole role) {
+    const std::wstring name = text::Trim(rawName);  // stored trimmed by ParseFanRoles
     auto roles = ParseFanRoles(text);
     std::erase_if(roles, [&](const auto& p) { return p.first == name; });
     if (role != FanRole::Unknown) roles.emplace_back(name, role);
     return FormatFanRoles(roles);
 }
 
-FanRole EffectiveFanRole(const std::wstring& text, const std::wstring& name, FanRole detected) {
+FanRole EffectiveFanRole(const std::wstring& text, const std::wstring& rawName, FanRole detected) {
+    const std::wstring name = text::Trim(rawName);
     for (const auto& [n, role] : ParseFanRoles(text)) {
         if (n == name) return role;
     }

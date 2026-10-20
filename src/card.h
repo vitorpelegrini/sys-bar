@@ -35,9 +35,11 @@ struct CardSensorLine {
 
 struct CardModel {
     std::wstring title;
-    std::wstring window;  // "last 60 s"
-    std::wstring hintLeft, hintRight;
-    int capacity = 60;  // samples that fit in the graph
+    std::wstring window;        // optional header text on the right
+    std::wstring footerLeft;    // "sys-bar 1.0.0"
+    std::wstring footerRight;   // update status: "Up to date", "Version 1.1.0 available"...
+    bool footerAccent = false;  // footerRight is news (an update): drawn in the accent color
+    int capacity = 60;          // samples that fit in the graph
     std::vector<CardRow> rows;
     std::wstring sensorsTitle;  // empty = no sensors section
     std::vector<CardSensorLine> sensors;
@@ -55,7 +57,7 @@ public:
     // Bitmap size in pixels, including the shadow margin. The width grows with long translations and
     // long texts wrap; when the visible card would be taller than `maxHeightPx` (> 0, shadow not included),
     // the graphs get shorter to fit.
-    SIZE Measure(UINT dpi, const CardModel& model, int maxHeightPx = 0);
+    SIZE Measure(UINT dpi, const CardModel& model, int maxHeightPx = 0, int maxWidthPx = 0);
     float SparkHeightDip() const { return sparkHeight_; }
     int ShadowMarginPx() const;
     float WidthDip() const { return width_; }
