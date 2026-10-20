@@ -9,3 +9,6 @@ dist/
 .vscode/
 *.user
 *.suo
+
+# Personal session notes
+.brain/

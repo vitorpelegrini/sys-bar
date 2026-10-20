@@ -373,3 +373,15 @@ TEST(Previews_bar_and_card) {
         }
     }
 }
+
+TEST(Layout_makes_room_when_a_badge_appears_later) {
+    // Regression: a disk temperature only becomes known once the drive is busy. The column was laid out
+    // without the badge and never widened, so "40°" was drawn over the "DISK" label.
+    Renderer r(SharedGfx());
+    ItemView disk = Percent(MetricId::Disk, L"DISCO", 0);
+    r.Layout({96, false, 40}, {disk});
+    disk = WithBadge(disk, 40);
+    r.Layout({96, false, 40}, {disk});
+    float excess = 0;
+    CHECK_EQ(r.FirstOverflow({disk}, &excess), -1);
+}

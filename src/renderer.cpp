@@ -160,7 +160,7 @@ SIZE Renderer::Layout(const LayoutInput& input, const std::vector<ItemView>& ite
     std::wstring key =
         std::to_wstring(input.dpi) + L'|' + std::to_wstring(input.vertical) + L'|' + std::to_wstring(input.thicknessPx);
     for (const auto& item : items) {
-        key += L'|' + item.label + L'\x1f' + item.worstStrong + L'\x1f' + item.worstWeak;
+        key += L'|' + item.label + L'\x1f' + item.worstStrong + L'\x1f' + item.worstWeak + L'\x1f' + item.worstBadge;
     }
     if (key == layoutKey_ && blocks_.size() == items.size()) return size_;
     layoutKey_ = key;

@@ -85,6 +85,8 @@ extra keys:
 | `IntervalMs` | `1000` | Update interval in milliseconds (250–10000). |
 | `OffsetDip` | `0` | Windows 11: extra space between the strip and the notification area. Increase it if the strip covers something, e.g. widgets. |
 | `Language` | `auto` | `auto` or a code: `en`, `pt`, `es`, `fr`, `de`, `it`, `pl`, `tr`, `ru`, `uk`, `ja`, `ko`, `zh-Hans`, `zh-Hant`. |
+| `CheckUpdates` | `1` | Look for a new release once a day. |
+| `AutoUpdate` | `1` | Download, verify (SHA-256) and install updates silently (installed copies only). |
 
 ## FAQ
 
@@ -96,6 +98,14 @@ RAM and VRAM are shown in GiB, labeled "GB" like Task Manager does.
 The GPU % is the busiest GPU, so work on either the integrated or the dedicated one shows up. VRAM
 is the dedicated memory of the main GPU. On integrated-only systems VRAM is hidden, because they
 have no real dedicated memory.
+
+**How do updates work?**
+Once a day sys-bar checks GitHub Releases. When there is a new version:
+- An installed copy downloads the installer and checks its SHA-256, then installs it silently at a quiet
+  moment. The strip disappears for a second and comes back updated.
+- A portable copy shows a notice with a download link.
+
+You can check manually or turn this off under **Updates** in the menu.
 
 **Multiple monitors?**
 sys-bar shows on the taskbar of the primary monitor.

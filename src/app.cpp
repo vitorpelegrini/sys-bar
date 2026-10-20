@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdarg>
+#include <ctime>
 #include <cwchar>
 #include <thread>
 
@@ -23,6 +24,12 @@ constexpr UINT_PTR kHousekeepingTimer = 1;
 constexpr UINT_PTR kAnimationTimer = 2;
 constexpr UINT_PTR kCardDelayTimer = 3;
 constexpr UINT_PTR kCardFadeTimer = 4;
+constexpr UINT_PTR kUpdateTimer = 5;
+constexpr UINT_PTR kNoticeTimer = 6;
+constexpr UINT kFirstUpdateCheckMs = 2 * 60 * 1000;  // shortly after start, not during logon
+constexpr UINT kUpdateTimerMs = 6 * 60 * 60 * 1000;  // re-evaluate every 6 hours...
+constexpr int64_t kUpdateIntervalS = 24 * 60 * 60;   // ...but check at most once a day
+constexpr UINT kNoticeMs = 5000;
 constexpr UINT kHousekeepingMs = 2000;
 constexpr ULONG kHousekeepingToleranceMs = 500;  // lets Windows coalesce our wake-ups
 constexpr UINT kFrameMs = 15;
@@ -57,6 +64,9 @@ enum Command : UINT {
     kCmdAbout,
     kCmdExit,
     kCmdIntervalCustom,
+    kCmdCheckUpdates,
+    kCmdAutoUpdate,
+    kCmdInstallUpdate,
     kCmdInterval0 = 200,  // + index into kIntervals
     kCmdLanguageAuto = 300,
     kCmdLanguage0 = 301,  // + i18n::Lang
@@ -246,6 +256,8 @@ int App::Run(HINSTANCE instance) {
     RefreshTheme(true);
     if (!sampler_.Start(controller_, WM_APP_SAMPLE, settings_.intervalMs)) Log(L"sampler failed to start");
     SetCoalescableTimer(controller_, kHousekeepingTimer, kHousekeepingMs, nullptr, kHousekeepingToleranceMs);
+    updater_.Init(controller_, WM_APP_UPDATE, SYSBAR_VERSION_WTEXT, SYSBAR_RELEASES_API);
+    SetTimer(controller_, kUpdateTimer, kFirstUpdateCheckMs, nullptr);
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
@@ -476,10 +488,16 @@ void App::RebuildItems() {
 
     // Temperature badge on the label line ("54°"), colored when warm/hot.
     auto badge = [&](MetricId id, const std::optional<double>& celsius) {
-        if (!settings_.showTemperatures || !celsius || items_.empty()) return;
+        if (!settings_.showTemperatures || items_.empty()) return;
+        // Once a metric has shown a temperature, its column keeps the room for it: the strip must not
+        // grow and shrink whenever a reading is momentarily missing (e.g. an idle drive).
+        bool& seen = badgeSeen_[static_cast<int>(id)];
+        seen = seen || celsius.has_value();
+        if (!seen) return;
         ItemView& item = items_.back();
-        item.badge = std::to_wstring(static_cast<int>(std::lround(*celsius))) + L"°";
         item.worstBadge = L"100°";
+        if (!celsius) return;
+        item.badge = std::to_wstring(static_cast<int>(std::lround(*celsius))) + L"°";
         item.badgeLevel = settings_.colorByLoad ? logic::TemperatureLevel(id, *celsius) : 0;
     };
 
@@ -574,6 +592,7 @@ void App::OnSample() {
     Reposition();
     UpdateAccessibleName();
     if (cardVisible_) UpdateCard(false);
+    MaybeInstallUpdate();
 }
 
 void App::OnAnimationTick() {
@@ -728,6 +747,24 @@ CardModel App::BuildCardModel() const {
         line->value = line->value.empty() ? value : line->value + L" · " + value;
     }
     if (!model.sensors.empty()) model.sensorsTitle = S(i18n::Str::CardSensors);
+
+    // Notice: a message the user asked for (e.g. "you have the latest version"), else update news.
+    if (!notice_.empty() && GetTickCount64() < noticeUntil_) {
+        model.notice = notice_;
+    } else if (const auto release = updater_.latest()) {
+        const std::wstring version = update::ToString(release->version);
+        switch (updater_.state()) {
+            case update::State::Available:
+                model.notice = text::Format(S(i18n::Str::CardUpdateAvailable), {version});
+                break;
+            case update::State::Downloading:
+            case update::State::Ready:
+            case update::State::Installing:
+                model.notice = text::Format(S(i18n::Str::UpdateDownloading), {version});
+                break;
+            default: break;
+        }
+    }
     return model;
 }
 
@@ -801,6 +838,84 @@ void App::OnCardFadeTick() {
 }
 
 // ---------------------------------------------------------------------------------------------------
+// Updates
+// ---------------------------------------------------------------------------------------------------
+
+void App::OnUpdateTimer() {
+    SetTimer(controller_, kUpdateTimer, kUpdateTimerMs, nullptr);
+    if (!settings_.checkUpdates) return;
+    const int64_t now = static_cast<int64_t>(time(nullptr));
+    if (now - settings_.lastUpdateCheck >= kUpdateIntervalS) updater_.Check();
+}
+
+void App::OnUpdateState(update::State state) {
+    using update::State;
+    Log(L"updater state %d", static_cast<int>(state));
+    const auto release = updater_.latest();
+    const std::wstring version = release ? update::ToString(release->version) : L"";
+    switch (state) {
+        case State::UpToDate:
+        case State::Available:
+            settings_.lastUpdateCheck = static_cast<int64_t>(time(nullptr));
+            settings_.Save();
+            Log(L"update check: %s (latest %s)", state == State::Available ? L"available" : L"up to date",
+                version.c_str());
+            if (state == State::Available && updater_.installedCopy() && (settings_.autoUpdate || installWhenReady_)) {
+                installWhenReady_ = true;
+                updater_.Download();
+            }
+            if (manualUpdateCheck_) {
+                manualUpdateCheck_ = false;
+                ShowNotice(state == State::Available
+                               ? text::Format(S(i18n::Str::CardUpdateAvailable), {version})
+                               : text::Format(S(i18n::Str::UpdateUpToDate), {SYSBAR_VERSION_WTEXT}));
+            }
+            break;
+        case State::Ready: MaybeInstallUpdate(); break;
+        case State::Failed:
+            Log(L"update failed");
+            if (manualUpdateCheck_ || installWhenReady_) ShowNotice(S(i18n::Str::UpdateFailed));
+            manualUpdateCheck_ = installWhenReady_ = false;
+            break;
+        default: break;
+    }
+    if (cardVisible_) UpdateCard(false);
+}
+
+// Installs a downloaded update at a quiet moment: never while the user is looking at the card.
+void App::MaybeInstallUpdate() {
+    if (!installWhenReady_ || updater_.state() != update::State::Ready || hover_ || cardVisible_) return;
+    Log(L"installing update");
+    installWhenReady_ = false;
+    updater_.Install();  // the installer closes us cleanly and starts the new version
+}
+
+void App::ShowNotice(std::wstring text) {
+    notice_ = std::move(text);
+    noticeUntil_ = GetTickCount64() + kNoticeMs;
+    if (cardVisible_) {
+        UpdateCard(false);
+    } else {
+        ShowCard();
+    }
+    SetTimer(controller_, kNoticeTimer, kNoticeMs, nullptr);
+}
+
+std::wstring App::UpdateStatusText() const {
+    using update::State;
+    const auto release = updater_.latest();
+    const std::wstring version = release ? update::ToString(release->version) : L"";
+    switch (updater_.state()) {
+        case State::Checking: return S(i18n::Str::UpdateChecking);
+        case State::Available: return text::Format(S(i18n::Str::CardUpdateAvailable), {version});
+        case State::Downloading:
+        case State::Ready:
+        case State::Installing: return text::Format(S(i18n::Str::UpdateDownloading), {version});
+        case State::Failed: return S(i18n::Str::UpdateFailed);
+        default: return text::Format(S(i18n::Str::UpdateUpToDate), {SYSBAR_VERSION_WTEXT});
+    }
+}
+// ---------------------------------------------------------------------------------------------------
 // Menu and commands
 // ---------------------------------------------------------------------------------------------------
 
@@ -809,10 +924,12 @@ void App::ShowMenu(POINT screen) {
     HMENU menu = CreatePopupMenu();
     HMENU intervals = CreatePopupMenu();
     HMENU languages = CreatePopupMenu();
+    HMENU updates = CreatePopupMenu();
     if (!menu || !intervals || !languages) {
         if (menu) DestroyMenu(menu);
         if (intervals) DestroyMenu(intervals);
         if (languages) DestroyMenu(languages);
+        if (updates) DestroyMenu(updates);
         return;
     }
 
@@ -858,6 +975,26 @@ void App::ShowMenu(POINT screen) {
     }
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(languages), S(i18n::Str::MenuLanguage));
 
+    // Updates: status line, check now, automatic install and, when available, install/download.
+    if (updates) {
+        AppendMenuW(updates, MF_STRING | MF_GRAYED, 0, UpdateStatusText().c_str());
+        AppendMenuW(updates, MF_SEPARATOR, 0, nullptr);
+        if (const auto release = updater_.latest(); release && updater_.state() == update::State::Available) {
+            const std::wstring version = update::ToString(release->version);
+            AppendMenuW(
+                updates, MF_STRING, kCmdInstallUpdate,
+                text::Format(S(updater_.installedCopy() ? i18n::Str::MenuUpdateInstall : i18n::Str::MenuUpdateDownload),
+                             {version})
+                    .c_str());
+        }
+        const bool busy = updater_.state() == update::State::Checking || updater_.state() == update::State::Downloading;
+        AppendMenuW(updates, MF_STRING | (busy ? MF_GRAYED : 0u), kCmdCheckUpdates, S(i18n::Str::MenuCheckUpdates));
+        AppendMenuW(updates,
+                    check(settings_.autoUpdate) | (updater_.installedCopy() ? 0u : static_cast<UINT>(MF_GRAYED)),
+                    kCmdAutoUpdate, S(i18n::Str::MenuAutoUpdate));
+        AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(updates), S(i18n::Str::MenuUpdates));
+    }
+
     AppendMenuW(menu, check(settings_.colorByLoad), kCmdColorByLoad, S(i18n::Str::MenuHighlight));
     AppendMenuW(menu, check(settings_.clickOpensTaskManager), kCmdClickOpensTaskManager, S(i18n::Str::MenuClickOpens));
     AppendMenuW(menu, check(Settings::IsAutostartEnabled()), kCmdAutostart, S(i18n::Str::MenuAutostart));
@@ -885,6 +1022,7 @@ void App::ShowMenu(POINT screen) {
 }
 
 void App::Execute(UINT command) {
+    Log(L"menu command %u", command);
     auto toggle = [&](bool& flag, MetricId id) {
         if (flag && !logic::CanHide(settings_, id, Available())) return;  // keep at least one metric
         flag = !flag;
@@ -919,6 +1057,23 @@ void App::Execute(UINT command) {
         case kCmdAbout: ShellOpen(SYSBAR_PROJECT_URL); break;
         case kCmdExit: Quit(); break;
         case kCmdIntervalCustom: break;
+        case kCmdCheckUpdates:
+            manualUpdateCheck_ = true;
+            updater_.Check();
+            break;
+        case kCmdAutoUpdate:
+            settings_.autoUpdate = !settings_.autoUpdate;
+            settings_.Save();
+            break;
+        case kCmdInstallUpdate:
+            if (updater_.installedCopy()) {
+                installWhenReady_ = true;
+                updater_.Download();
+            } else if (const auto release = updater_.latest()) {
+                ShellOpen(release->pageUrl.empty() ? std::wstring(SYSBAR_PROJECT_URL) + L"/releases/latest"
+                                                   : release->pageUrl);
+            }
+            break;
         case kCmdLanguageAuto:
             settings_.language = L"auto";
             settings_.Save();
@@ -996,6 +1151,7 @@ LRESULT App::HandleController(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_APP_SAMPLE: OnSample(); return 0;
         case WM_APP_REPOSITION: Reposition(); return 0;
+        case WM_APP_UPDATE: OnUpdateState(static_cast<update::State>(wp)); return 0;
         case WM_TIMER:
             switch (wp) {
                 case kHousekeepingTimer:
@@ -1010,6 +1166,11 @@ LRESULT App::HandleController(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     if (hover_) ShowCard();
                     break;
                 case kCardFadeTimer: OnCardFadeTick(); break;
+                case kUpdateTimer: OnUpdateTimer(); break;
+                case kNoticeTimer:
+                    KillTimer(hwnd, kNoticeTimer);
+                    if (!hover_) HideCard();
+                    break;
             }
             return 0;
         case WM_SETTINGCHANGE:

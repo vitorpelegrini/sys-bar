@@ -34,6 +34,9 @@ First public release.
 - Recovers automatically when Explorer restarts, the GPU driver resets or the display layout
   changes; pauses sampling while the display is off or the session is locked.
 - Installer (per-user, no administrator rights, x64 and ARM64) and portable zips.
+- Automatic updates: a daily check of GitHub Releases; installed copies download the new installer,
+  verify its SHA-256 and install it silently, while portable copies show a notice. The version and an
+  "Updates" submenu (check now, install automatically) are in the context menu.
 - `sys-bar.exe --quit` to close a running instance cleanly; `SYSBAR_LOG` environment variable
   for diagnostic logs.
 

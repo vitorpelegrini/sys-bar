@@ -2,6 +2,7 @@
 
 #include "common.h"
 
+#include <cstdint>
 #include <string>
 
 // User preferences, stored in %APPDATA%\sys-bar\settings.ini
@@ -24,6 +25,9 @@ struct Settings {
     // Extra space (DIPs) kept between the strip and the notification area. Lets users with
     // widgets or many tray icons nudge the strip; 0 = automatic placement only.
     int offsetDip = 0;
+    bool checkUpdates = true;     // look for new releases once a day
+    bool autoUpdate = true;       // download, verify and install them silently (installed copies)
+    int64_t lastUpdateCheck = 0;  // Unix time of the last successful check
 
     void Load();
     void Save() const;

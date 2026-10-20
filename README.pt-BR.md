@@ -86,6 +86,8 @@ algumas chaves extras:
 | `IntervalMs` | `1000` | Intervalo de atualização em milissegundos (250–10000). |
 | `OffsetDip` | `0` | Windows 11: espaço extra entre a faixa e a área de notificação. Aumente se a faixa cobrir algo, como os widgets. |
 | `Language` | `auto` | `auto` ou um código: `en`, `pt`, `es`, `fr`, `de`, `it`, `pl`, `tr`, `ru`, `uk`, `ja`, `ko`, `zh-Hans`, `zh-Hant`. |
+| `CheckUpdates` | `1` | Procura uma nova versão uma vez por dia. |
+| `AutoUpdate` | `1` | Baixa, verifica (SHA-256) e instala atualizações em silêncio (só na versão instalada). |
 
 ## Perguntas frequentes
 
@@ -97,6 +99,14 @@ aparecem em GiB, com o rótulo "GB", como faz o Gerenciador.
 A % de GPU é a da GPU mais ocupada, então o trabalho aparece seja na integrada ou na dedicada. A
 VRAM é a memória dedicada da GPU principal. Em sistemas só com GPU integrada, a VRAM fica oculta,
 porque não existe memória dedicada de verdade.
+
+**Como funcionam as atualizações?**
+Uma vez por dia o sys-bar consulta as Releases do GitHub. Quando há versão nova:
+- A versão instalada baixa o instalador e confere o SHA-256. Depois instala em silêncio num momento
+  tranquilo: a faixa some por um segundo e volta atualizada.
+- A versão portátil mostra um aviso com o link para baixar.
+
+Dá para procurar manualmente ou desligar isso em **Atualizações**, no menu.
 
 **Vários monitores?**
 O sys-bar aparece na barra de tarefas do monitor principal.

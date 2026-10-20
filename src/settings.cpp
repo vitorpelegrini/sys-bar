@@ -72,6 +72,11 @@ void Settings::Load() {
                                    kMinIntervalMs, kMaxIntervalMs);
     offsetDip = std::clamp(static_cast<int>(GetPrivateProfileIntW(kSection, L"OffsetDip", offsetDip, file.c_str())), 0,
                            kMaxOffsetDip);
+    checkUpdates = ReadBool(file, L"CheckUpdates", checkUpdates);
+    autoUpdate = ReadBool(file, L"AutoUpdate", autoUpdate);
+    wchar_t stamp[32] = {};
+    GetPrivateProfileStringW(kSection, L"LastUpdateCheck", L"0", stamp, 32, file.c_str());
+    lastUpdateCheck = std::max<int64_t>(0, _wtoi64(stamp));
     wchar_t lang[32] = {};
     GetPrivateProfileStringW(kSection, L"Language", language.c_str(), lang, 32, file.c_str());
     language = lang[0] ? lang : L"auto";
@@ -92,6 +97,9 @@ void Settings::Save() const {
     WriteValue(file, L"IntervalMs", std::to_wstring(intervalMs));
     WriteValue(file, L"OffsetDip", std::to_wstring(offsetDip));
     WriteValue(file, L"Language", language);
+    WriteValue(file, L"CheckUpdates", std::to_wstring(checkUpdates));
+    WriteValue(file, L"AutoUpdate", std::to_wstring(autoUpdate));
+    WriteValue(file, L"LastUpdateCheck", std::to_wstring(lastUpdateCheck));
 }
 
 bool Settings::IsAutostartEnabled() {

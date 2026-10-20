@@ -8,6 +8,7 @@
 #include "metrics.h"
 #include "renderer.h"
 #include "settings.h"
+#include "update.h"
 
 #include <array>
 #include <deque>
@@ -66,6 +67,13 @@ private:
     void PresentCard();
     void OnCardFadeTick();
 
+    // Updates
+    void OnUpdateTimer();
+    void OnUpdateState(update::State state);
+    void MaybeInstallUpdate();
+    void ShowNotice(std::wstring text);
+    std::wstring UpdateStatusText() const;
+
     // Menu and commands
     void ShowMenu(POINT screen);
     void Execute(UINT command);
@@ -114,6 +122,11 @@ private:
     Card card_{gfx_};
     Settings settings_;
     MetricsSampler sampler_;
+    update::Updater updater_;
+    bool manualUpdateCheck_ = false;  // the user asked: report the result
+    bool installWhenReady_ = false;   // the user asked to install (or auto-update is on)
+    std::wstring notice_;             // transient message shown in the card
+    ULONGLONG noticeUntil_ = 0;
     MetricsSnapshot snapshot_;
     LayoutInput layout_{};
     i18n::Lang lang_ = i18n::Lang::English;
@@ -122,6 +135,7 @@ private:
     std::array<float, kMetricCount> shown_{};
     std::array<float, kMetricCount> target_{};
     std::array<std::deque<float>, kMetricCount> history_;
+    std::array<bool, kMetricCount> badgeSeen_{};  // metric has shown a temperature at least once
     std::vector<ItemView> items_;
     std::wstring cpuDisplayName_;
     std::wstring accessibleName_;

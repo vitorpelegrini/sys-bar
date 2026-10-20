@@ -4,6 +4,7 @@ cmake_minimum_required(VERSION 3.20)
 # and the release workflow.
 project(sys-bar VERSION 1.0.0 LANGUAGES CXX RC)
 set(SYSBAR_PROJECT_URL "https://github.com/vitorpelegrini/sys-bar")
+set(SYSBAR_RELEASES_API "https://api.github.com/repos/vitorpelegrini/sys-bar/releases/latest")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -36,13 +37,15 @@ add_library(sysbar_core STATIC
     src/gfx.cpp
     src/hardware.cpp
     src/i18n.cpp
+    src/json.cpp
     src/logic.cpp
     src/metrics.cpp
     src/renderer.cpp
     src/settings.cpp
+    src/update.cpp
 )
 target_include_directories(sysbar_core PUBLIC src)
-target_link_libraries(sysbar_core PUBLIC d2d1 dwrite dxgi gdi32 pdh shell32 ole32 advapi32 wtsapi32)
+target_link_libraries(sysbar_core PUBLIC d2d1 dwrite dxgi gdi32 pdh shell32 ole32 advapi32 wtsapi32 winhttp bcrypt)
 sysbar_options(sysbar_core)
 
 add_executable(sys-bar WIN32 src/main.cpp src/resource.rc src/app.manifest)
@@ -58,6 +61,7 @@ if(SYSBAR_BUILD_TESTS)
         tests/test_hardware.cpp
         tests/test_i18n.cpp
         tests/test_logic.cpp
+        tests/test_update.cpp
         tests/test_render.cpp
         tests/test_system.cpp
         src/app.manifest)
