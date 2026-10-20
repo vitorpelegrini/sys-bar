@@ -7,6 +7,7 @@
 #include "logic.h"
 #include "metrics.h"
 #include "renderer.h"
+#include "sensorfeed.h"
 #include "settings.h"
 #include "update.h"
 
@@ -94,6 +95,7 @@ private:
 
     // Data and drawing
     void Render(bool force = false);
+    void RenderFrame();
     void RenderBar(Taskbar& t, bool force);
     void OnSample();
     void OnAnimationTick();
@@ -168,6 +170,7 @@ private:
     Theme theme_{};
     Settings settings_;
     MetricsSampler sampler_;
+    feed::DetailSignal sensorDetail_;  // tells the sensors service when fans are on screen
     update::Updater updater_;
     bool manualUpdateCheck_ = false;  // the user asked: report the result
     bool installWhenReady_ = false;   // the user asked to install (or auto-update is on)
@@ -181,6 +184,7 @@ private:
     std::deque<double> netHistory_;       // bytes/s (busier direction), for the card's self-scaling graph
     std::vector<std::wstring> menuFans_;  // fans listed in the open context menu (index -> name)
     std::vector<ItemView> items_;
+    std::vector<int> itemKeys_;  // tracks_ key of each item, for the animation frames
     std::wstring cpuDisplayName_;
     std::wstring accessibleName_;
     wchar_t decimal_ = L'.';

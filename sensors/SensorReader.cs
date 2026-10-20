@@ -11,10 +11,14 @@ namespace SysBar.Sensors
     {
         private static readonly TimeSpan StorageInterval = TimeSpan.FromSeconds(10);  // SMART queries are slow
         private static readonly TimeSpan GpuInterval = TimeSpan.FromSeconds(3);       // only its fan, which is slow
+        // Fans are only shown in sys-bar's card: while it is closed they are refreshed now and then (its menu
+        // lists them), and right away when the card opens.
+        private static readonly TimeSpan FanIdleInterval = TimeSpan.FromSeconds(15);
         private readonly Computer _computer;
         private readonly Stopwatch _clock = Stopwatch.StartNew();  // monotonic: immune to clock changes
         private TimeSpan _lastStorageUpdate = TimeSpan.FromDays(-1);
         private TimeSpan _lastGpuUpdate = TimeSpan.FromDays(-1);
+        private TimeSpan _lastFanUpdate = TimeSpan.FromDays(-1);
 
         public SensorReader()
         {
@@ -35,22 +39,28 @@ namespace SysBar.Sensors
             _computer.Open();
         }
 
-        public (float cpuTemperature, List<Reading> readings) Read()
+        /// <param name="fansShown">sys-bar's card is open: fans are refreshed at full rate.</param>
+        /// <param name="fansOnly">The card is opening: refresh just the fans, at once (the rest is fresh).</param>
+        public (float cpuTemperature, List<Reading> readings) Read(bool fansShown = true, bool fansOnly = false)
         {
             var readings = new List<Reading>();
             var boardFans = new List<(IHardware item, string name, float rpm, float duty)>();
             float cpu = float.NaN;
             TimeSpan now = _clock.Elapsed;
-            bool refreshStorage = now - _lastStorageUpdate >= StorageInterval;
+            bool refreshStorage = !fansOnly && now - _lastStorageUpdate >= StorageInterval;
             if (refreshStorage) _lastStorageUpdate = now;
-            bool refreshGpu = now - _lastGpuUpdate >= GpuInterval;
+            bool refreshGpu = fansOnly || now - _lastGpuUpdate >= (fansShown ? GpuInterval : FanIdleInterval);
             if (refreshGpu) _lastGpuUpdate = now;
+            bool refreshFans = fansOnly || fansShown || now - _lastFanUpdate >= FanIdleInterval;
+            if (refreshFans) _lastFanUpdate = now;
             foreach (IHardware hardware in _computer.Hardware)
             {
                 // Drive temperatures and GPU fans change slowly and cost most of the time: refresh them less often.
+                // The CPU (its temperature is on the strip) every time; boards and controllers only carry fans.
                 bool due = hardware.HardwareType == HardwareType.Storage ? refreshStorage
                     : IsGpu(hardware.HardwareType) ? refreshGpu
-                    : true;
+                    : hardware.HardwareType == HardwareType.Cpu ? !fansOnly
+                    : refreshFans;
                 if (due) Update(hardware);
                 switch (hardware.HardwareType)
                 {

@@ -2,6 +2,8 @@
 
 #include "hardware.h"
 
+#include <algorithm>
+
 TEST(Disk_instance_names_are_parsed) {
     int number = -1;
     std::wstring letters;
@@ -118,6 +120,46 @@ TEST(Network_and_battery_read_without_admin) {
     const hw::BatteryReading b = battery.Read();
     std::printf("      battery: %s\n", b.present ? "present" : "none");
     if (b.present) CHECK(b.percent >= 0.0 && b.percent <= 100.0);
+}
+
+TEST(Network_reader_matches_the_full_table_and_rarely_reads_it) {
+    auto sameSet = [](std::vector<hw::NetInterface> a, std::vector<hw::NetInterface> b) {
+        auto byLuid = [](const hw::NetInterface& x, const hw::NetInterface& y) { return x.luid < y.luid; };
+        std::sort(a.begin(), a.end(), byLuid);
+        std::sort(b.begin(), b.end(), byLuid);
+        if (a.size() != b.size()) return false;
+        for (size_t i = 0; i < a.size(); ++i) {
+            if (a[i].luid != b[i].luid || a[i].name != b[i].name || a[i].wireless != b[i].wireless) return false;
+        }
+        return true;
+    };
+    hw::NetInterfaceReader reader;
+    const ULONGLONG t0 = GetTickCount64();
+    const auto first = reader.Read(t0);
+    CHECK(sameSet(first, hw::ReadNetInterfaces()));
+    CHECK_EQ(reader.scans(), 1);
+
+    // Within the rescan period only the known interfaces are queried, and their counters keep moving.
+    for (int i = 1; i <= 4; ++i) {
+        const auto again = reader.Read(t0 + 1000 * i);
+        CHECK(sameSet(again, first));
+        for (const auto& now : again) {
+            const auto before =
+                std::find_if(first.begin(), first.end(), [&](const auto& x) { return x.luid == now.luid; });
+            if (before != first.end()) CHECK(now.inOctets >= before->inOctets && now.outOctets >= before->outOctets);
+        }
+    }
+    CHECK(reader.scans() <= 2);  // 1, or 2 when Windows reported an interface change meanwhile
+
+    const int scans = reader.scans();
+    reader.Read(t0 + 6000);  // the period elapsed
+    CHECK_EQ(reader.scans(), scans + 1);
+    reader.Invalidate();  // an interface changed
+    reader.Read(t0 + 6500);
+    CHECK_EQ(reader.scans(), scans + 2);
+    reader.Read(t0 + 7000, true);  // explicit rescan (resuming from a pause)
+    CHECK_EQ(reader.scans(), scans + 3);
+    reader.Close();
 }
 
 TEST(Disk_kind_names) {

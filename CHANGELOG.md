@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- About half the CPU time, same pixels and same numbers. Measured side by side against 1.0.0 on a 36-thread
+  desktop, card closed: sys-bar 1.07% → 0.55% of one core and its GPU use 0.105% → 0.012%; the sensors
+  service 0.68% → 0.27% of one core, with 69% fewer hardware queries.
+  - Animation frames redraw only the bars that moved, straight into the bitmap (about 5 µs instead of 1 ms),
+    and hand Windows only the changed rectangle. The bars are drawn by a small rasterizer matched to
+    Direct2D's: 99.8% of the pixels within one level, the rest on the antialiased round ends.
+  - The network list is read in full every 5 s or when Windows reports an interface change; in between only
+    the adapters in use are queried, instead of the whole table (27 rows here) every second.
+  - The sensors service refreshes motherboard and GPU fans, which are only shown in the card, every 15 s
+    while the card is closed. When the mouse reaches the strip, sys-bar tells the service, which refreshes
+    them at once (26 ms here, before the card appears) and every second while the card stays open. The CPU
+    temperature on the strip is still read every second. An older sys-bar keeps the previous behavior.
+
 ## [1.0.0] - 2026-10-20
 
 First public release.

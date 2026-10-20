@@ -2,6 +2,7 @@
 
 #include "common.h"
 
+#include <atomic>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -87,6 +88,31 @@ struct NetInterface {
 // Physical interfaces that are up: no loopback, tunnels, virtual switch ports or filter drivers, so
 // traffic routed through a Hyper-V/WSL switch is counted once, on the real adapter.
 std::vector<NetInterface> ReadNetInterfaces();
+
+// The same list, cheaply: the full interface table (dozens of virtual rows) is read again only every few
+// seconds or when Windows reports an interface change; in between, just the known interfaces are queried.
+class NetInterfaceReader {
+public:
+    NetInterfaceReader() = default;
+    ~NetInterfaceReader() { Close(); }
+    NetInterfaceReader(const NetInterfaceReader&) = delete;
+    NetInterfaceReader& operator=(const NetInterfaceReader&) = delete;
+
+    std::vector<NetInterface> Read(ULONGLONG tickMs, bool rescan = false);
+    void Close();  // stops the change notifications
+
+    // The next Read() goes through the whole table (an interface was added, removed or changed).
+    void Invalidate() { changed_ = true; }
+    // How many full table reads happened (used by the tests).
+    int scans() const { return scans_; }
+
+private:
+    std::vector<NetInterface> known_;
+    ULONGLONG nextScan_ = 0;
+    HANDLE notification_ = nullptr;
+    std::atomic<bool> changed_{true};
+    int scans_ = 0;
+};
 
 struct NetRates {
     bool available = false;  // at least one physical interface is up

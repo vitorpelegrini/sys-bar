@@ -17,6 +17,7 @@ namespace SysBar.Sensors
         private static readonly TimeSpan MinInterval = TimeSpan.FromMilliseconds(750);
         private static readonly TimeSpan UpdateCooldown = TimeSpan.FromMinutes(10);  // at most one GitHub check per 10 min
         private static readonly TimeSpan EventRetry = TimeSpan.FromSeconds(30);
+        private static readonly TimeSpan DetailWindow = TimeSpan.FromSeconds(3);  // sys-bar signals every second
 
         private readonly ManualResetEvent _stop = new ManualResetEvent(false);
         private readonly ManualResetEvent _never = new ManualResetEvent(false);  // stands in for a missing event
@@ -70,6 +71,8 @@ namespace SysBar.Sensors
             SharedBlock? block = null;
             EventWaitHandle? wanted = null;
             EventWaitHandle? updateRequest = null;
+            EventWaitHandle? detail = null;
+            EventWaitHandle? onDemand = null;
             // Monotonic clock: a clock change (NTP, a user) must not freeze sampling or the update cooldown.
             var clock = Stopwatch.StartNew();
             TimeSpan never = TimeSpan.FromDays(-1);
@@ -80,19 +83,26 @@ namespace SysBar.Sensors
             {
                 block = new SharedBlock();
                 TimeSpan lastWanted = Log.ToConsole ? clock.Elapsed : never;
-                TimeSpan lastRead = never;
+                TimeSpan lastRead = never, lastDetail = never, lastFansOnly = never, lastOnDemand = never;
 
                 while (true)
                 {
                     // The events are (re)created until they exist: a name taken by another account only delays
                     // us, it never takes the service down.
-                    if ((wanted == null || updateRequest == null) && clock.Elapsed - lastEventAttempt >= EventRetry)
+                    if ((wanted == null || updateRequest == null || detail == null || onDemand == null) &&
+                        clock.Elapsed - lastEventAttempt >= EventRetry)
                     {
                         lastEventAttempt = clock.Elapsed;
                         wanted ??= SharedBlock.CreateWantedEvent();
                         updateRequest ??= SharedBlock.CreateClientEvent(SelfUpdate.UpdateEventName);
+                        detail ??= SharedBlock.CreateClientEvent(SharedBlock.DetailEventName);
+                        onDemand ??= SharedBlock.CreateClientEvent(SharedBlock.OnDemandEventName);
                     }
-                    var handles = new WaitHandle[] { _stop, (WaitHandle?)wanted ?? _never, (WaitHandle?)updateRequest ?? _never };
+                    var handles = new WaitHandle[]
+                    {
+                        _stop, (WaitHandle?)wanted ?? _never, (WaitHandle?)updateRequest ?? _never, (WaitHandle?)detail ?? _never,
+                        (WaitHandle?)onDemand ?? _never,
+                    };
                     int signaled = WaitHandle.WaitAny(handles, TimeSpan.FromSeconds(1));
                     if (signaled == 0) break;
                     TimeSpan now = clock.Elapsed;
@@ -111,16 +121,38 @@ namespace SysBar.Sensors
                         }
                         continue;
                     }
+                    if (signaled == 4)
+                    {
+                        lastOnDemand = now;  // the client tells us when fans are on screen
+                        continue;
+                    }
+                    bool fansOnly = false;
+                    if (signaled == 3)
+                    {
+                        // The card is opening: its fans are refreshed right away (at most every MinInterval), then
+                        // at full rate while it stays open.
+                        fansOnly = now - lastDetail >= DetailWindow && now - lastFansOnly >= MinInterval;
+                        lastDetail = now;
+                        lastWanted = now;
+                        if (!fansOnly) continue;
+                        lastFansOnly = now;
+                    }
                     if (signaled == 1 || Log.ToConsole) lastWanted = now;
 
                     if (now - lastWanted < ActiveWindow)
                     {
-                        if (now - lastRead < MinInterval) continue;
-                        lastRead = now;
+                        if (!fansOnly && now - lastRead < MinInterval) continue;
+                        if (!fansOnly) lastRead = now;
                         try
                         {
-                            reader ??= Open();
-                            var (cpu, readings) = reader.Read();
+                            if (reader == null)
+                            {
+                                reader = Open();
+                                fansOnly = false;  // nothing has been read yet: everything at once
+                            }
+                            // Fans at full rate while on screen, or for a client that never says when they are.
+                            bool fansShown = now - lastOnDemand >= ActiveWindow || now - lastDetail < DetailWindow;
+                            var (cpu, readings) = reader.Read(fansShown, fansOnly);
                             block.Publish(cpu, readings);
                             if (Log.ToConsole)
                             {
@@ -156,6 +188,8 @@ namespace SysBar.Sensors
                 SafeDispose(reader);
                 wanted?.Dispose();
                 updateRequest?.Dispose();
+                detail?.Dispose();
+                onDemand?.Dispose();
                 block?.Dispose();
                 Log.Write("service stopped");
             }

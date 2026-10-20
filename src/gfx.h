@@ -54,10 +54,11 @@ public:
 
     bool Ensure(int width, int height);
     void Release();
-    bool Present(HWND hwnd, const POINT* screenPosition, BYTE alpha) const;
+    bool Present(HWND hwnd, const POINT* screenPosition, BYTE alpha, const RECT* dirty = nullptr) const;
 
     HDC dc() const { return dc_; }
     const uint32_t* pixels() const { return static_cast<const uint32_t*>(bits_); }
+    uint32_t* bits() { return static_cast<uint32_t*>(bits_); }
     int width() const { return width_; }
     int height() const { return height_; }
 
@@ -69,6 +70,11 @@ private:
     int width_ = 0;
     int height_ = 0;
 };
+
+// Paints an antialiased rounded rectangle (device pixels) over premultiplied BGRA pixels, source-over, the way
+// Direct2D's software rasterizer does: used for the bars, which then need no Direct2D pass to animate.
+void FillRoundedRect(uint32_t* pixels, int stride, const RECT& clip, const D2D1_RECT_F& rect, float radius,
+                     const D2D1_COLOR_F& color);
 
 D2D1_COLOR_F Rgb(uint32_t rgb, float alpha = 1.0f);
 D2D1_COLOR_F FromColorRef(COLORREF color, float alpha = 1.0f);

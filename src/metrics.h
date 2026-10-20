@@ -104,7 +104,8 @@ public:
     MetricsSampler(const MetricsSampler&) = delete;
     MetricsSampler& operator=(const MetricsSampler&) = delete;
 
-    bool Start(HWND notify, UINT message, DWORD intervalMs);
+    // `message` is posted for each sample; `sensorsMessage` when only the advanced sensors were read again.
+    bool Start(HWND notify, UINT message, DWORD intervalMs, UINT sensorsMessage = 0);
     void Stop();
     void SetInterval(DWORD intervalMs);
     // Paused while the display is off or the session is locked: no sampling, no wake-ups.
@@ -112,6 +113,11 @@ public:
 
     // Returns the latest snapshot and re-arms the notification.
     MetricsSnapshot Latest();
+    // The latest snapshot, without re-arming anything (for `sensorsMessage`).
+    MetricsSnapshot Peek() const;
+    // Reads the advanced sensors again now, outside the sampling cadence (the card is opening and the service
+    // was just asked for fresh fans); `sensorsMessage` follows.
+    void RefreshSensors();
     SystemInfo Info() const;
 
 private:
@@ -136,6 +142,8 @@ private:
 
     HWND notify_ = nullptr;
     UINT message_ = 0;
+    UINT sensorsMessage_ = 0;
+    std::atomic<bool> sensorsWanted_{false};
     std::atomic<DWORD> intervalMs_{1000};
     std::atomic<bool> paused_{false};
     std::atomic<bool> notifyPending_{false};
@@ -168,6 +176,7 @@ private:
     hw::GpuSensors gpuSensors_;
     hw::StorageDevices storage_;
     hw::NetworkMeter network_;
+    hw::NetInterfaceReader netReader_;
     hw::BatteryMeter battery_;
     std::unique_ptr<feed::SensorFeed> feed_;                  // advanced sensors service (optional)
     ULONGLONG nextServiceUpdate_ = 0;                         // next time an outdated service may be asked
