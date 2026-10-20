@@ -55,6 +55,7 @@ private:
     const uint8_t* view_ = nullptr;
     HANDLE wanted_ = nullptr;
     HANDLE update_ = nullptr;
+    HANDLE onDemand_ = nullptr;
     ULONGLONG nextOpen_ = 0;
     ULONGLONG lastGood_ = 0;
 };
@@ -62,6 +63,22 @@ private:
 constexpr uint32_t EncodeVersion(uint32_t major, uint32_t minor, uint32_t patch) {
     return (major << 20) | (minor << 10) | patch;
 }
+
+// Tells the service that fans are on screen (sys-bar's card is open or opening): it then refreshes them every
+// second instead of every few seconds, and right away when the card opens. Never blocks.
+class DetailSignal {
+public:
+    DetailSignal() = default;
+    ~DetailSignal();
+    DetailSignal(const DetailSignal&) = delete;
+    DetailSignal& operator=(const DetailSignal&) = delete;
+
+    void Raise();
+
+private:
+    HANDLE event_ = nullptr;
+    ULONGLONG nextOpen_ = 0;
+};
 
 // Whether the service is registered (any user may query this).
 bool ServiceInstalled();

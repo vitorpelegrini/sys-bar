@@ -38,9 +38,15 @@ public:
 
     // True when drawing `items` would produce different pixels than the last Paint().
     bool NeedsPaint(const std::vector<ItemView>& items, bool hover) const;
-    // Draws into the internal bitmap; Present() hands it to the layered window.
-    bool Paint(const std::vector<ItemView>& items, bool hover);
-    bool Present(HWND hwnd) const { return surface_.Present(hwnd, nullptr, 255); }
+    // Draws into the internal bitmap; Present() hands it to the layered window. When only bar fills changed
+    // (the animation frames), only those bars are redrawn, unless `full`.
+    bool Paint(const std::vector<ItemView>& items, bool hover, bool full = false);
+    bool Present(HWND hwnd) const {
+        if (!dirtyAll_ && IsRectEmpty(&dirty_)) return true;  // nothing was redrawn
+        return surface_.Present(hwnd, nullptr, 255, dirtyAll_ ? nullptr : &dirty_);
+    }
+    // True when the last Paint() redrew only some bars (used by the tests).
+    bool LastPaintWasPartial() const { return !dirtyAll_; }
 
     // Index of the first value that does not fit its column, or -1 (used by the tests).
     int FirstOverflow(const std::vector<ItemView>& items, float* excessDip = nullptr);
@@ -49,6 +55,10 @@ public:
     bool compact() const { return compact_; }
 
 private:
+    struct BarGeometry {
+        float top = 0, height = 0, width = 0;  // block-local DIPs
+    };
+
     struct Block {
         float x = 0, y = 0, w = 0, h = 0;  // DIPs
         float contentScale = 1.0f;         // < 1 when the value does not fit (narrow vertical taskbar)
@@ -60,6 +70,10 @@ private:
         ComPtr<IDWriteTextLayout> badge;
         float badgeBaseline = 0, badgeWidth = 0;
         std::wstring badgeText;  // text currently held by `badge`
+        BarGeometry bar;
+        uint64_t barStamp = 0;                // fill and color of the bar as last drawn (0: not drawn)
+        RECT barPixels{};                     // device pixels the bar may touch
+        std::vector<uint32_t> barBackground;  // those pixels before the bar was drawn
     };
 
     bool EnsureTarget();
@@ -69,6 +83,12 @@ private:
     ComPtr<IDWriteTextLayout> MakeValue(const std::wstring& strong, const std::wstring& weak, float& baseline,
                                         float& width);
     uint64_t Signature(const std::vector<ItemView>& items, bool hover) const;
+    uint64_t TextSignature(const std::vector<ItemView>& items, bool hover) const;
+    uint64_t BarStamp(const ItemView& item, size_t index) const;
+    BarGeometry Bar(const Block& b, float& labelBase, float& valueBase, float& valueX) const;
+    void DrawBackground(bool hover);
+    void DrawBar(const ItemView& item, const Block& b);
+    bool PaintBars(const std::vector<ItemView>& items, bool hover);
     float Snap(float dip) const;
 
     const Gfx& gfx_;
@@ -87,4 +107,7 @@ private:
     SIZE size_{0, 0};
     std::vector<Block> blocks_;
     uint64_t lastSignature_ = 0;
+    uint64_t lastText_ = 0;  // everything but the bars, as last drawn
+    RECT dirty_{};           // part of the bitmap changed by the last Paint()
+    bool dirtyAll_ = true;
 };

@@ -104,10 +104,11 @@ MetricsSampler::~MetricsSampler() {
     Stop();
 }
 
-bool MetricsSampler::Start(HWND notify, UINT message, DWORD intervalMs) {
+bool MetricsSampler::Start(HWND notify, UINT message, DWORD intervalMs, UINT sensorsMessage) {
     if (thread_.joinable()) return true;
     notify_ = notify;
     message_ = message;
+    sensorsMessage_ = sensorsMessage;
     intervalMs_ = intervalMs;
     stopEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     wakeEvent_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
@@ -155,6 +156,17 @@ MetricsSnapshot MetricsSampler::Latest() {
     return latest_;
 }
 
+MetricsSnapshot MetricsSampler::Peek() const {
+    std::lock_guard lock(mutex_);
+    return latest_;
+}
+
+void MetricsSampler::RefreshSensors() {
+    if (!sensorsMessage_ || !wakeEvent_) return;
+    sensorsWanted_ = true;
+    SetEvent(wakeEvent_);
+}
+
 SystemInfo MetricsSampler::Info() const {
     std::lock_guard lock(mutex_);
     return info_;
@@ -178,7 +190,7 @@ void MetricsSampler::Run() {
                 // Resuming: start a fresh measurement window instead of averaging over the pause.
                 if (query_) PdhCollectQueryData(query_);
                 ReadCpuFallback(primed);
-                network_.Update(hw::ReadNetInterfaces(), GetTickCount64());
+                network_.Update(netReader_.Read(GetTickCount64(), true), GetTickCount64());
                 nextDue = GetTickCount64() + kFirstSampleDelayMs;
             }
             continue;
@@ -189,6 +201,24 @@ void MetricsSampler::Run() {
         const DWORD result = WaitForMultipleObjects(2, handles, FALSE, wait);
         if (result == WAIT_OBJECT_0) break;
         if (result == WAIT_OBJECT_0 + 1) {
+            if (sensorsWanted_.exchange(false)) {
+                // Only the advanced sensors, into the latest snapshot: the sampling cadence is left alone.
+                MetricsSnapshot snapshot = Peek();
+                if (snapshot.valid) {
+                    snapshot.sensors.clear();
+                    snapshot.cpuTemperature.reset();
+                    snapshot.advancedSensors = false;
+                    CollectSensors(snapshot);
+                    {
+                        std::lock_guard lock(mutex_);
+                        latest_.sensors = std::move(snapshot.sensors);
+                        latest_.cpuTemperature = snapshot.cpuTemperature;
+                        latest_.advancedSensors = snapshot.advancedSensors;
+                    }
+                    PostMessageW(notify_, sensorsMessage_, 0, 0);
+                }
+                continue;
+            }
             if (!paused_) nextDue = GetTickCount64() + intervalMs_.load();  // interval changed: reschedule
             continue;
         }
@@ -261,6 +291,7 @@ void MetricsSampler::CloseQuery() {
     diskIdleCounter_ = diskReadCounter_ = diskWriteCounter_ = nullptr;
     gpuSensors_.Close();
     storage_.Close();
+    netReader_.Close();
     diskInstanceKey_.clear();  // a later Start() enumerates the drives again
     lastTemperatureRead_.clear();
 }
@@ -365,7 +396,8 @@ void MetricsSampler::Collect(MetricsSnapshot& out) {
     CollectGpu(out, collected);
     CollectDisks(out, collected);
     CollectSensors(out);
-    out.network = network_.Update(hw::ReadNetInterfaces(), GetTickCount64());
+    const ULONGLONG tick = GetTickCount64();
+    out.network = network_.Update(netReader_.Read(tick), tick);
     out.battery = battery_.Read();
 }
 

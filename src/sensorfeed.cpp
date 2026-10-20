@@ -10,6 +10,8 @@ namespace {
 constexpr wchar_t kMappingName[] = L"Global\\SysBarSensors";
 constexpr wchar_t kWantedEventName[] = L"Global\\SysBarSensorsWanted";
 constexpr wchar_t kUpdateEventName[] = L"Global\\SysBarSensorsUpdate";
+constexpr wchar_t kDetailEventName[] = L"Global\\SysBarSensorsDetail";
+constexpr wchar_t kOnDemandEventName[] = L"Global\\SysBarSensorsOnDemand";
 constexpr wchar_t kServiceName[] = L"SysBarSensors";
 constexpr ULONGLONG kReopenMs = 10'000;       // the service is looked for again every 10 s
 constexpr ULONGLONG kStaleReopenMs = 30'000;  // no valid data for this long: drop the mapping, open it anew
@@ -100,10 +102,25 @@ void SensorFeed::Close() {
     if (mapping_) CloseHandle(mapping_);
     if (wanted_) CloseHandle(wanted_);
     if (update_) CloseHandle(update_);
+    if (onDemand_) CloseHandle(onDemand_);
     view_ = nullptr;
     mapping_ = nullptr;
     wanted_ = nullptr;
     update_ = nullptr;
+    onDemand_ = nullptr;
+}
+
+DetailSignal::~DetailSignal() {
+    if (event_) CloseHandle(event_);
+}
+
+void DetailSignal::Raise() {
+    // An older service has no such event: looked for again now and then, in case the service was updated.
+    if (!event_ && GetTickCount64() >= nextOpen_) {
+        event_ = OpenEventW(EVENT_MODIFY_STATE, FALSE, kDetailEventName);
+        if (!event_) nextOpen_ = GetTickCount64() + kReopenMs;
+    }
+    if (event_) SetEvent(event_);
 }
 
 void SensorFeed::RequestUpdate() {
@@ -116,6 +133,9 @@ bool SensorFeed::Read(Decoded& out) {
     if (!view_) return false;
     if (!wanted_) OpenWanted();
     if (wanted_) SetEvent(wanted_);  // "someone is looking": keeps the service sampling
+    // "Fans only when asked": we signal the detail event while they are on screen (see DetailSignal).
+    if (!onDemand_) onDemand_ = OpenEventW(EVENT_MODIFY_STATE, FALSE, kOnDemandEventName);
+    if (onDemand_) SetEvent(onDemand_);
 
     // Sequence lock: copy the block and accept it only if the sequence was even and unchanged.
     uint8_t copy[kBlockSize];

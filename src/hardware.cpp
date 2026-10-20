@@ -210,16 +210,28 @@ const wchar_t* DiskKindName(DiskKind kind) {
 
 // ---- Network --------------------------------------------------------------------------------------
 
+namespace {
+
+constexpr ULONGLONG kNetRescanMs = 5'000;
+
+bool Usable(const MIB_IF_ROW2& row) {
+    return row.InterfaceAndOperStatusFlags.HardwareInterface && !row.InterfaceAndOperStatusFlags.FilterInterface &&
+           row.OperStatus == IfOperStatusUp && row.Type != IF_TYPE_SOFTWARE_LOOPBACK && row.Type != IF_TYPE_TUNNEL;
+}
+
+void NETIOAPI_API_ OnInterfaceChange(PVOID context, PMIB_IPINTERFACE_ROW, MIB_NOTIFICATION_TYPE) {
+    static_cast<NetInterfaceReader*>(context)->Invalidate();
+}
+
+}  // namespace
+
 std::vector<NetInterface> ReadNetInterfaces() {
     std::vector<NetInterface> out;
     MIB_IF_TABLE2* table = nullptr;
     if (GetIfTable2(&table) != NO_ERROR || !table) return out;
     for (ULONG i = 0; i < table->NumEntries; ++i) {
         const MIB_IF_ROW2& row = table->Table[i];
-        if (!row.InterfaceAndOperStatusFlags.HardwareInterface || row.InterfaceAndOperStatusFlags.FilterInterface ||
-            row.OperStatus != IfOperStatusUp || row.Type == IF_TYPE_SOFTWARE_LOOPBACK || row.Type == IF_TYPE_TUNNEL) {
-            continue;
-        }
+        if (!Usable(row)) continue;
         NetInterface item;
         item.luid = row.InterfaceLuid.Value;
         item.name = row.Alias;
@@ -231,6 +243,43 @@ std::vector<NetInterface> ReadNetInterfaces() {
     }
     FreeMibTable(table);
     return out;
+}
+
+std::vector<NetInterface> NetInterfaceReader::Read(ULONGLONG tickMs, bool rescan) {
+    if (!notification_) {
+        HANDLE handle = nullptr;
+        if (NotifyIpInterfaceChange(AF_UNSPEC, &OnInterfaceChange, this, FALSE, &handle) == NO_ERROR) {
+            notification_ = handle;
+        }
+    }
+    const bool due = rescan || changed_.exchange(false) || tickMs >= nextScan_;
+    if (!due) {
+        // Only the interfaces already known: one small query each instead of the whole table.
+        std::vector<NetInterface> out = known_;
+        bool stale = false;
+        for (NetInterface& item : out) {
+            MIB_IF_ROW2 row{};
+            row.InterfaceLuid.Value = item.luid;
+            if (GetIfEntry2(&row) != NO_ERROR || !Usable(row)) {
+                stale = true;  // gone or down: the table decides what is left
+                break;
+            }
+            item.inOctets = row.InOctets;
+            item.outOctets = row.OutOctets;
+            item.linkBps = std::max(row.ReceiveLinkSpeed, row.TransmitLinkSpeed);
+        }
+        if (!stale) return out;
+    }
+    known_ = ReadNetInterfaces();
+    nextScan_ = tickMs + kNetRescanMs;
+    ++scans_;
+    return known_;
+}
+
+void NetInterfaceReader::Close() {
+    if (notification_) CancelMibChangeNotify2(notification_);  // waits for a callback in progress
+    notification_ = nullptr;
+    changed_ = true;
 }
 
 NetRates NetworkMeter::Update(const std::vector<NetInterface>& now, ULONGLONG tickMs) {

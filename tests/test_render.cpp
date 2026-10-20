@@ -297,6 +297,83 @@ TEST(Paint_is_skipped_only_when_nothing_visible_changed) {
     CHECK(r.NeedsPaint(items, false));  // theme change
 }
 
+TEST(Animation_frames_redraw_only_the_bars_and_match_a_full_paint) {
+    // An animation frame redraws just the bars that moved; the pixels must be exactly those of a full paint.
+    ItemView net;
+    net.id = MetricId::Net;
+    net.label = L"NET";
+    net.strong = L"↓ 4,2";  // the comma descends towards the bar
+    net.weak = L" MB/s";
+    net.worstStrong = L"↓ 999";
+    net.worstWeak = L" MB/s";
+    net.badge = L"↑ 412 KB/s";
+    net.worstBadge = L"↑ 999 MB/s";
+    net.fraction = 0.04f;
+    auto start = Sample(23, kRamTotal / 2, 94, kVramTotal / 3);
+    start[0] = WithBadge(start[0], 47);
+    start.push_back(net);
+    start.push_back(WithBadge(Percent(MetricId::Disk, L"SSD D:", 0), 33));
+    start.back().fraction = 0.0f;
+
+    // Frames of an animation: fills move (one grows into the warning color, one appears as a dot, one
+    // disappears), the text stays.
+    auto frame = [&](float t) {
+        auto items = start;
+        items[0].fraction = 0.23f + 0.6f * t;
+        items[0].load = items[0].fraction;  // crosses the amber and red thresholds
+        items[1].fraction = 0.5f - 0.3f * t;
+        items[2].fraction = 0.94f * (1.0f - t);
+        items[4].fraction = 0.04f + 0.5f * t;
+        items[5].fraction = t < 0.5f ? 0.0005f : 0.0f;
+        return items;
+    };
+
+    struct Variant {
+        UINT dpi;
+        float thicknessDip;
+        bool vertical, hover, light;
+    };
+    int partial = 0, compared = 0;
+    for (UINT dpi : {96u, 120u, 144u, 168u, 192u}) {
+        for (const Variant v : {Variant{dpi, 40, false, false, false}, Variant{dpi, 48, false, true, true},
+                                Variant{dpi, 30, false, false, true}, Variant{dpi, 62, true, true, false}}) {
+            const LayoutInput in{v.dpi, v.vertical, static_cast<int>(std::lround(v.thicknessDip * v.dpi / 96.0f))};
+            Renderer animated(SharedGfx());
+            animated.SetTheme(MakeTheme(v.light));
+            animated.Layout(in, start);
+            CHECK(animated.Paint(start, v.hover));
+            for (float t : {0.1f, 0.35f, 0.6f, 1.0f}) {
+                const auto items = frame(t);
+                animated.Layout(in, items);
+                CHECK(animated.Paint(items, v.hover));
+                partial += animated.LastPaintWasPartial() ? 1 : 0;
+
+                Renderer fresh(SharedGfx());
+                fresh.SetTheme(MakeTheme(v.light));
+                fresh.Layout(in, items);
+                CHECK(fresh.Paint(items, v.hover));
+                const Surface& a = animated.surface();
+                const Surface& b = fresh.surface();
+                CHECK_EQ(a.width(), b.width());
+                CHECK_EQ(a.height(), b.height());
+                if (a.width() != b.width() || a.height() != b.height()) continue;
+                ++compared;
+                for (int i = 0; i < a.width() * a.height(); ++i) {
+                    if (a.pixels()[i] != b.pixels()[i]) {
+                        t::Fail(__FILE__, __LINE__,
+                                "dpi " + std::to_string(v.dpi) + " thickness " + std::to_string(v.thicknessDip) +
+                                    ": pixel " + std::to_string(i % a.width()) + "," + std::to_string(i / a.width()) +
+                                    " differs from a full paint");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    CHECK(compared > 0);
+    CHECK(partial >= compared * 3 / 4);  // the cheap path is the normal one
+}
+
 TEST(High_contrast_paints_with_system_colors) {
     Renderer r(SharedGfx());
     Theme theme;
@@ -642,4 +719,68 @@ TEST(Banner_card) {
     card.Measure(141, model);  // the size of the artwork's card
     CHECK(card.Paint(model));
     SaveWithAlpha(card.surface(), L"banner-card");
+}
+
+TEST(Bars_drawn_without_Direct2D_look_the_same) {
+    // The bars are painted by our own rasterizer (cheap animation frames): it must match Direct2D, which drew
+    // them before, to within one level almost everywhere (only the antialiasing of the round ends may differ).
+    const Gfx& gfx = SharedGfx();
+    auto target = CreateDcTarget(gfx.d2d());
+    ComPtr<ID2D1SolidColorBrush> brush;
+    CHECK(target && SUCCEEDED(target->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 1), &brush)));
+    if (!target || !brush) return;
+    long long total = 0, close = 0;
+    int worst = 0;
+    const int width = 160, height = 24;
+    const RECT bounds{0, 0, width, height};
+    for (float scale : {1.0f, 1.25f, 1.5f, 1.75f, 2.0f, 2.5f, 3.0f}) {
+        for (float barHeight : {3.0f, 2.0f}) {
+            for (bool hover : {false, true}) {
+                for (float fill : {0.0f, 3.0f, 3.4f, 7.25f, 20.5f, 43.0f}) {
+                    const float x0 = 9.0f * scale, y0 = std::round(8.0f * scale), h = barHeight * scale;
+                    const D2D1_RECT_F track = D2D1::RectF(x0, y0, x0 + 43.0f * scale, y0 + h);
+                    const D2D1_RECT_F filled = D2D1::RectF(x0, y0, x0 + std::max(fill * scale, h), y0 + h);
+                    const D2D1_COLOR_F trackColor = D2D1::ColorF(1, 1, 1, 0.14f),
+                                       fillColor = D2D1::ColorF(0.3f, 0.76f, 1.0f);
+                    Surface reference, ours;
+                    CHECK(reference.Ensure(width, height) && ours.Ensure(width, height));
+                    for (Surface* s : {&reference, &ours}) {
+                        target->BindDC(s->dc(), &bounds);
+                        target->BeginDraw();
+                        target->Clear(D2D1::ColorF(0, 0, 0, 1.0f / 255.0f));
+                        if (hover) {
+                            brush->SetColor(D2D1::ColorF(1, 1, 1, 0.09f));
+                            target->FillRoundedRectangle(
+                                D2D1::RoundedRect(D2D1::RectF(1, 2, width - 1.0f, height - 2.0f), 4, 4), brush.Get());
+                        }
+                        if (s == &reference) {
+                            brush->SetColor(trackColor);
+                            target->FillRoundedRectangle(D2D1::RoundedRect(track, h / 2, h / 2), brush.Get());
+                            if (fill > 0) {
+                                brush->SetColor(fillColor);
+                                target->FillRoundedRectangle(D2D1::RoundedRect(filled, h / 2, h / 2), brush.Get());
+                            }
+                        }
+                        CHECK(SUCCEEDED(target->EndDraw()));
+                    }
+                    GdiFlush();
+                    FillRoundedRect(ours.bits(), width, bounds, track, h / 2, trackColor);
+                    if (fill > 0) FillRoundedRect(ours.bits(), width, bounds, filled, h / 2, fillColor);
+                    for (int i = 0; i < width * height; ++i) {
+                        const uint32_t p = reference.pixels()[i], q = ours.pixels()[i];
+                        int d = 0;
+                        for (int c = 0; c < 32; c += 8)
+                            d = std::max(d, std::abs(int((p >> c) & 255) - int((q >> c) & 255)));
+                        ++total;
+                        close += d <= 1;
+                        worst = std::max(worst, d);
+                    }
+                }
+            }
+        }
+    }
+    std::printf("      %.3f%% of the pixels within one level of Direct2D, worst %d/255\n",
+                100.0 * static_cast<double>(close) / static_cast<double>(total), worst);
+    CHECK(close * 1000 >= total * 998);
+    CHECK(worst <= 40);
 }

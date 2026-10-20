@@ -274,7 +274,9 @@ int App::Run(HINSTANCE instance) {
     WTSRegisterSessionNotification(controller_, NOTIFY_FOR_THIS_SESSION);
 
     RefreshTheme(true);
-    if (!sampler_.Start(controller_, WM_APP_SAMPLE, settings_.intervalMs)) Log(L"sampler failed to start");
+    if (!sampler_.Start(controller_, WM_APP_SAMPLE, settings_.intervalMs, WM_APP_FRESH_SENSORS)) {
+        Log(L"sampler failed to start");
+    }
     SetCoalescableTimer(controller_, kHousekeepingTimer, kHousekeepingMs, nullptr, kHousekeepingToleranceMs);
     updater_.Init(controller_, WM_APP_UPDATE, SYSBAR_VERSION_WTEXT, SYSBAR_RELEASES_API);
     SetTimer(controller_, kUpdateTimer, kFirstUpdateCheckMs, nullptr);
@@ -643,6 +645,7 @@ void App::ProbeTrayEdge(Taskbar& t) {
 
 void App::RebuildItems() {
     items_.clear();
+    itemKeys_.clear();
     const auto& s = snapshot_;
     const std::wstring gb = S(i18n::Str::UnitGB);
 
@@ -658,6 +661,7 @@ void App::RebuildItems() {
         item.load = static_cast<float>(value / 100.0);
         item.fraction = tracks_[key].shown;
         items_.push_back(std::move(item));
+        itemKeys_.push_back(key);
     };
     auto memory = [&](MetricId id, const wchar_t* label, uint64_t used, uint64_t total) {
         ItemView item;
@@ -671,6 +675,7 @@ void App::RebuildItems() {
         item.load = text::Ratio(used, total);
         item.fraction = tracks_[Key(id)].shown;
         items_.push_back(std::move(item));
+        itemKeys_.push_back(Key(id));
     };
 
     // Temperature badge on the label line ("54°"), colored when warm/hot.
@@ -735,6 +740,7 @@ void App::RebuildItems() {
                 item.worstBadge = L"\u2191 999 " + widest;
                 item.fraction = tracks_[Key(id)].shown;
                 items_.push_back(std::move(item));
+                itemKeys_.push_back(Key(id));
                 break;
             }
             case MetricId::Battery: {
@@ -759,6 +765,7 @@ void App::RebuildItems() {
                     if (b.watts) item.badge = text::Watts(*b.watts, decimal_);
                 }
                 items_.push_back(std::move(item));
+                itemKeys_.push_back(Key(id));
                 break;
             }
         }
@@ -796,15 +803,27 @@ void App::Render(bool force) {
     for (auto& t : bars_) RenderBar(*t, force);
 }
 
+// An animation frame: only the bar fills move, so the items keep their text and get their new fraction.
+void App::RenderFrame() {
+    if (bars_.empty()) return;
+    if (itemKeys_.size() != items_.size()) return Render();
+    for (size_t i = 0; i < items_.size(); ++i) {
+        const auto track = tracks_.find(itemKeys_[i]);
+        if (track == tracks_.end()) return Render();
+        items_[i].fraction = track->second.shown;
+    }
+    for (auto& t : bars_) RenderBar(*t, false);
+}
+
 void App::RenderBar(Taskbar& t, bool force) {
     if (!t.bar || !t.renderer || t.layout.thicknessPx <= 0) return;
     const bool hover = t.bar == hoverBar_;
     t.renderer->Layout(t.layout, items_);
     if (!force && !t.renderer->NeedsPaint(items_, hover)) return;  // nothing visible changed
-    if (!t.renderer->Paint(items_, hover)) {
+    if (!t.renderer->Paint(items_, hover, force)) {
         // Render target recreated (rare): redo the layout and try once more.
         t.renderer->Layout(t.layout, items_);
-        if (!t.renderer->Paint(items_, hover)) return;
+        if (!t.renderer->Paint(items_, hover, true)) return;
     }
     t.renderer->Present(t.bar);
 }
@@ -880,7 +899,10 @@ void App::OnSample() {
 
     Reposition();
     UpdateAccessibleName();
-    if (cardVisible_) UpdateCard(false);
+    if (cardVisible_) {
+        sensorDetail_.Raise();  // fans are on screen: the service keeps them at full rate
+        UpdateCard(false);
+    }
     MaybeInstallUpdate();
 }
 
@@ -895,7 +917,7 @@ void App::OnAnimationTick() {
             moving = true;
         }
     }
-    Render();  // skipped automatically when the bars did not move by a visible amount
+    RenderFrame();  // skipped automatically when the bars did not move by a visible amount
     if (!moving) {
         KillTimer(controller_, kAnimationTimer);
         animating_ = false;
@@ -1232,6 +1254,7 @@ void App::ShowCard() {
         }
         SetWindowPos(cardWindow_, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
         cardVisible_ = true;
+        sampler_.RefreshSensors();  // fans the service refreshed when the mouse arrived
     }
     if (cardAlpha_ < 1.0f) SetTimer(controller_, kCardFadeTimer, kFrameMs, nullptr);
 }
@@ -1764,6 +1787,17 @@ LRESULT App::HandleController(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             return 0;
         case WM_APP_UPDATE: OnUpdateState(static_cast<update::State>(wp)); return 0;
+        case WM_APP_FRESH_SENSORS: {
+            // The card opened: its fans come fresh from the service instead of waiting for the next sample.
+            const MetricsSnapshot fresh = sampler_.Peek();
+            if (snapshot_.valid && fresh.valid) {
+                snapshot_.sensors = fresh.sensors;
+                snapshot_.cpuTemperature = fresh.cpuTemperature;
+                snapshot_.advancedSensors = fresh.advancedSensors;
+                if (cardVisible_) UpdateCard(false);
+            }
+            return 0;
+        }
         case WM_APP_SENSORS:
             Log(L"advanced sensors %s: exit code %lu", wp ? L"install" : L"uninstall", static_cast<DWORD>(lp));
             if (wp && lp == 0) ShowNotice(S(i18n::Str::MenuAdvancedSensorsActive));
@@ -1850,6 +1884,7 @@ LRESULT App::HandleBar(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (hoverBar_ != hwnd) {
                 if (hoverBar_) HideCard();  // moved straight from another monitor's strip
                 hoverBar_ = hwnd;
+                sensorDetail_.Raise();  // the card may open: the service refreshes its fans meanwhile
                 Render();
                 SetTimer(controller_, kCardDelayTimer, kCardDelayMs, nullptr);
             }

@@ -236,7 +236,7 @@ int Renderer::FirstOverflow(const std::vector<ItemView>& items, float* excessDip
     return -1;
 }
 
-uint64_t Renderer::Signature(const std::vector<ItemView>& items, bool hover) const {
+uint64_t Renderer::TextSignature(const std::vector<ItemView>& items, bool hover) const {
     Hasher h;
     h.Add(themeStamp_);
     h.Add(hover);
@@ -248,13 +248,26 @@ uint64_t Renderer::Signature(const std::vector<ItemView>& items, bool hover) con
         h.Add(item.weak);
         h.Add(compact_ ? std::wstring() : item.badge);
         h.Add(item.badgeLevel);
-        // Fill width in device pixels (half-pixel resolution): smaller changes are invisible.
-        const int fill = static_cast<int>(std::lround(std::clamp(item.fraction, 0.0f, 1.0f) * blocks_[i].w /
-                                                      blocks_[i].contentScale * scale_ * 2.0f));
-        h.Add(fill);
-        h.Add(item.fraction > 0.001f);  // Paint draws a minimum dot for any tiny value
-        h.Add(theme_.colorByLoad ? LoadLevel(item.load) : 0);
     }
+    return h.h == 0 ? 1 : h.h;
+}
+
+uint64_t Renderer::BarStamp(const ItemView& item, size_t index) const {
+    Hasher h;
+    h.Add(item.id);
+    // Fill width in device pixels (half-pixel resolution): smaller changes are invisible.
+    const int fill = static_cast<int>(std::lround(std::clamp(item.fraction, 0.0f, 1.0f) * blocks_[index].w /
+                                                  blocks_[index].contentScale * scale_ * 2.0f));
+    h.Add(fill);
+    h.Add(item.fraction > 0.001f);  // Paint draws a minimum dot for any tiny value
+    h.Add(theme_.colorByLoad ? LoadLevel(item.load) : 0);
+    return h.h == 0 ? 1 : h.h;  // 0 means "not drawn"
+}
+
+uint64_t Renderer::Signature(const std::vector<ItemView>& items, bool hover) const {
+    Hasher h;
+    h.Add(TextSignature(items, hover));
+    for (size_t i = 0; i < items.size() && i < blocks_.size(); ++i) h.Add(BarStamp(items[i], i));
     return h.h == 0 ? 1 : h.h;
 }
 
@@ -262,36 +275,104 @@ bool Renderer::NeedsPaint(const std::vector<ItemView>& items, bool hover) const 
     return lastSignature_ == 0 || items.size() != blocks_.size() || Signature(items, hover) != lastSignature_;
 }
 
-bool Renderer::Paint(const std::vector<ItemView>& items, bool hover) {
+Renderer::BarGeometry Renderer::Bar(const Block& b, float& labelBase, float& valueBase, float& valueX) const {
+    const float s = b.contentScale;
+    const float capLabel = kLabelSize * kCapRatio;
+    const float capValue = (compact_ ? kCompactValueSize : kValueSize) * kCapRatio;
+    const float barH = std::max(compact_ ? kCompactBarHeight : kBarHeight, 2.0f / scale_);
+    const float localH = b.h / s;
+
+    float barTop;
+    valueX = 0.0f;
+    if (compact_) {
+        const float visual = capValue + kCompactValueToBar + barH;
+        valueBase = (localH - visual) / 2.0f + capValue;
+        labelBase = valueBase;
+        barTop = valueBase + kCompactValueToBar;
+        valueX = b.labelWidth + kCompactInlineGap;
+    } else {
+        const float visual = capLabel + kLabelToValue + capValue + kValueToBar + barH;
+        labelBase = (localH - visual) / 2.0f + capLabel;
+        valueBase = labelBase + kLabelToValue + capValue;
+        barTop = valueBase + kValueToBar;
+    }
+    return {Snap(barTop), barH, b.w / s};
+}
+
+void Renderer::DrawBackground(bool hover) {
+    target_->SetTransform(D2D1::Matrix3x2F::Identity());
+    // Alpha 1/255 on the background: invisible, but it makes the whole window receive the mouse.
+    target_->Clear(D2D1::ColorF(0, 0, 0, 1.0f / 255.0f));
+    if (hover) {
+        const float widthDip = static_cast<float>(size_.cx) / scale_;
+        const float heightDip = static_cast<float>(size_.cy) / scale_;
+        brush_->SetColor(Ink(theme_, theme_.light ? 0.07f : 0.09f));
+        target_->FillRoundedRectangle(
+            D2D1::RoundedRect(D2D1::RectF(1.0f, 2.0f, widthDip - 1.0f, heightDip - 2.0f), kHoverRadius, kHoverRadius),
+            brush_.Get());
+    }
+}
+
+namespace {
+
+// Device pixels covered by a block-local DIP rectangle (rounded outwards).
+RECT ToPixels(float x0, float y0, float x1, float y1, float bx, float by, float s, float scale) {
+    return {static_cast<LONG>(std::floor((bx + x0 * s) * scale)), static_cast<LONG>(std::floor((by + y0 * s) * scale)),
+            static_cast<LONG>(std::ceil((bx + x1 * s) * scale)), static_cast<LONG>(std::ceil((by + y1 * s) * scale))};
+}
+
+}  // namespace
+
+// Bars are painted straight into the bitmap, over the background saved behind them: an animation frame then
+// costs a few microseconds instead of a Direct2D pass, and full paints draw them the very same way.
+void Renderer::DrawBar(const ItemView& item, const Block& b) {
+    uint32_t* pixels = surface_.bits();
+    if (!pixels || b.barBackground.empty()) return;
+    const RECT& clip = b.barPixels;
+    const int stride = surface_.width();
+    const LONG width = clip.right - clip.left;
+    for (LONG y = clip.top; y < clip.bottom; ++y) {  // restore what was behind the bar
+        std::copy_n(b.barBackground.data() + static_cast<size_t>(y - clip.top) * static_cast<size_t>(width),
+                    static_cast<size_t>(width),
+                    pixels + static_cast<size_t>(y) * static_cast<size_t>(stride) + clip.left);
+    }
+
+    const float s = b.contentScale * scale_;
+    const float x0 = b.x * scale_, y0 = (b.y + b.bar.top * b.contentScale) * scale_;
+    const float y1 = y0 + b.bar.height * s, radius = b.bar.height / 2.0f * s;
+    FillRoundedRect(pixels, stride, clip, D2D1::RectF(x0, y0, x0 + b.bar.width * s, y1), radius,
+                    Ink(theme_, theme_.light ? 0.11f : 0.14f));
+    const float fraction = std::clamp(item.fraction, 0.0f, 1.0f);
+    if (fraction > 0.001f) {
+        const float fill = std::max(b.bar.width * fraction, b.bar.height);  // never smaller than a round dot
+        FillRoundedRect(pixels, stride, clip, D2D1::RectF(x0, y0, x0 + fill * s, y1), radius,
+                        MetricColor(item.id, item.load, theme_));
+    }
+}
+
+bool Renderer::Paint(const std::vector<ItemView>& items, bool hover, bool full) {
     if (size_.cx <= 0 || size_.cy <= 0 || items.size() != blocks_.size()) return false;
     if (!EnsureTarget() || layoutKey_.empty()) return false;  // target recreated: the caller re-runs Layout()
+    const bool resized = surface_.width() != size_.cx || surface_.height() != size_.cy;
     if (!surface_.Ensure(size_.cx, size_.cy)) return false;
+
+    const uint64_t text = TextSignature(items, hover);
+    // Animation frames only move the bars: redraw just those, the text pixels stay as they are.
+    if (!full && !resized && lastSignature_ != 0 && text == lastText_) return PaintBars(items, hover);
 
     const RECT bounds{0, 0, size_.cx, size_.cy};
     if (FAILED(target_->BindDC(surface_.dc(), &bounds))) return false;
     target_->SetDpi(96.0f * scale_, 96.0f * scale_);
 
     const bool light = theme_.light;
-    const float widthDip = static_cast<float>(size_.cx) / scale_;
-    const float heightDip = static_cast<float>(size_.cy) / scale_;
-
     target_->BeginDraw();
-    target_->SetTransform(D2D1::Matrix3x2F::Identity());
-    // Alpha 1/255 on the background: invisible, but it makes the whole window receive the mouse.
-    target_->Clear(D2D1::ColorF(0, 0, 0, 1.0f / 255.0f));
-
-    if (hover) {
-        brush_->SetColor(Ink(theme_, light ? 0.07f : 0.09f));
-        target_->FillRoundedRectangle(
-            D2D1::RoundedRect(D2D1::RectF(1.0f, 2.0f, widthDip - 1.0f, heightDip - 2.0f), kHoverRadius, kHoverRadius),
-            brush_.Get());
-    }
-
+    DrawBackground(hover);
     weakBrush_->SetColor(Ink(theme_, light ? 0.56f : 0.58f));
 
     for (size_t i = 0; i < items.size(); ++i) {
         const ItemView& item = items[i];
         Block& b = blocks_[i];
+        b.barStamp = 0;
 
         if (!b.value || b.strong != item.strong || b.weak != item.weak) {
             b.value = MakeValue(item.strong, item.weak, b.valueBaseline, b.valueWidth);
@@ -301,24 +382,8 @@ bool Renderer::Paint(const std::vector<ItemView>& items, bool hover) {
         if (!b.label || !b.value) continue;
 
         const float s = b.contentScale;
-        const float capLabel = kLabelSize * kCapRatio;
-        const float capValue = (compact_ ? kCompactValueSize : kValueSize) * kCapRatio;
-        const float barH = std::max(compact_ ? kCompactBarHeight : kBarHeight, 2.0f / scale_);
-        const float localH = b.h / s;
-
-        float labelBase, valueBase, barTop, valueX = 0.0f;
-        if (compact_) {
-            const float visual = capValue + kCompactValueToBar + barH;
-            valueBase = (localH - visual) / 2.0f + capValue;
-            labelBase = valueBase;
-            barTop = valueBase + kCompactValueToBar;
-            valueX = b.labelWidth + kCompactInlineGap;
-        } else {
-            const float visual = capLabel + kLabelToValue + capValue + kValueToBar + barH;
-            labelBase = (localH - visual) / 2.0f + capLabel;
-            valueBase = labelBase + kLabelToValue + capValue;
-            barTop = valueBase + kValueToBar;
-        }
+        float labelBase, valueBase, valueX;
+        b.bar = Bar(b, labelBase, valueBase, valueX);
 
         // Content scale (only used by a narrow vertical taskbar), anchored at the block corner.
         target_->SetTransform(D2D1::Matrix3x2F::Scale(s, s) * D2D1::Matrix3x2F::Translation(b.x, b.y));
@@ -343,21 +408,6 @@ bool Renderer::Paint(const std::vector<ItemView>& items, bool hover) {
 
         brush_->SetColor(Ink(theme_, light ? 0.90f : 0.97f));
         target_->DrawTextLayout(D2D1::Point2F(valueX, Snap(valueBase) - b.valueBaseline), b.value.Get(), brush_.Get());
-
-        const float barW = b.w / s;
-        const float top = Snap(barTop);
-        const float radius = barH / 2.0f;
-        brush_->SetColor(Ink(theme_, light ? 0.11f : 0.14f));
-        target_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(0.0f, top, barW, top + barH), radius, radius),
-                                      brush_.Get());
-
-        const float fraction = std::clamp(item.fraction, 0.0f, 1.0f);
-        if (fraction > 0.001f) {
-            const float fill = std::max(barW * fraction, barH);  // never smaller than a round dot
-            brush_->SetColor(MetricColor(item.id, item.load, theme_));
-            target_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(0.0f, top, fill, top + barH), radius, radius),
-                                          brush_.Get());
-        }
     }
 
     const HRESULT hr = target_->EndDraw();
@@ -366,6 +416,43 @@ bool Renderer::Paint(const std::vector<ItemView>& items, bool hover) {
         return false;
     }
     if (FAILED(hr)) return false;
+
+    // The bars go on top, straight into the bitmap; what is behind them is kept for the animation frames.
+    GdiFlush();
+    const uint32_t* pixels = surface_.bits();
+    for (size_t i = 0; i < items.size(); ++i) {
+        Block& b = blocks_[i];
+        if (!b.label || !b.value || !pixels) continue;
+        const RECT area =
+            ToPixels(0.0f, b.bar.top, b.bar.width, b.bar.top + b.bar.height, b.x, b.y, b.contentScale, scale_);
+        IntersectRect(&b.barPixels, &area, &bounds);
+        const LONG width = b.barPixels.right - b.barPixels.left;
+        b.barBackground.clear();
+        for (LONG y = b.barPixels.top; y < b.barPixels.bottom; ++y) {
+            const uint32_t* row = pixels + static_cast<size_t>(y) * static_cast<size_t>(size_.cx) + b.barPixels.left;
+            b.barBackground.insert(b.barBackground.end(), row, row + width);
+        }
+        DrawBar(items[i], b);
+        b.barStamp = BarStamp(items[i], i);
+    }
+    lastText_ = text;
     lastSignature_ = Signature(items, hover);
+    dirtyAll_ = true;
+    return true;
+}
+
+bool Renderer::PaintBars(const std::vector<ItemView>& items, bool hover) {
+    dirty_ = {};
+    for (size_t i = 0; i < items.size(); ++i) {
+        Block& b = blocks_[i];
+        if (!b.barStamp) continue;  // not drawn (no text layout)
+        const uint64_t stamp = BarStamp(items[i], i);
+        if (stamp == b.barStamp) continue;
+        DrawBar(items[i], b);
+        b.barStamp = stamp;
+        UnionRect(&dirty_, &dirty_, &b.barPixels);
+    }
+    lastSignature_ = Signature(items, hover);
+    dirtyAll_ = false;
     return true;
 }

@@ -54,6 +54,13 @@ namespace SysBar.Sensors
     {
         public const string MappingName = @"Global\SysBarSensors";
         public const string WantedEventName = @"Global\SysBarSensorsWanted";
+        /// <summary>Signaled by sys-bar while its card (the only place fans are shown) is open or about to open.</summary>
+        public const string DetailEventName = @"Global\SysBarSensorsDetail";
+        /// <summary>
+        /// Signaled by sys-bar with every sample to say it uses <see cref="DetailEventName"/>; an older sys-bar
+        /// does not, and its fans are then kept at full rate.
+        /// </summary>
+        public const string OnDemandEventName = @"Global\SysBarSensorsOnDemand";
         public const uint Magic = 0x31534253;  // "SBS1"
         public const uint Version = 1;
         public const int MaxEntries = 64;
