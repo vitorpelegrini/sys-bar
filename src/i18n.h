@@ -101,6 +101,7 @@ enum class Str {
     CardBatteryLeft,
     MenuFans,
     MenuFanAuto,
+    MenuAllTaskbars,
     Count,
 };
 

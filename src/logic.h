@@ -47,6 +47,13 @@ struct ModernInput {
 bool IsPlausibleNotifyRect(const RECT& trayClient, const RECT& notify);
 RECT PlaceModern(const ModernInput& in);
 
+// Taskbars without a notification-area HWND (Windows 11, other monitors): width of the cluster of
+// controls touching the right edge (clock, tray icons, "show desktop"), from the bounding rectangles UI
+// Automation reports; elements closer than `maxGapPx` belong to the same cluster. -1 when there is none
+// or it looks wrong (more than half the taskbar: the task buttons were reached).
+constexpr int kTrayClusterGapDip = 12;
+int RightControlsWidth(const RECT& tray, const std::vector<RECT>& elements, int maxGapPx);
+
 // ---- Hover card --------------------------------------------------------------------------------
 struct CardInput {
     RECT strip{};    // strip window (screen)

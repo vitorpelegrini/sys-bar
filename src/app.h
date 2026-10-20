@@ -13,7 +13,9 @@
 #include <array>
 #include <deque>
 #include <map>
+#include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // Owns the application: a hidden controller window (receives system broadcasts and timers), the
@@ -41,6 +43,32 @@ private:
     static constexpr int kDiskKeyBase = 100;
     static int Key(MetricId id) { return static_cast<int>(id); }
 
+    // One strip per taskbar: the main one and, optionally, those on other monitors.
+    struct Taskbar {
+        HWND tray = nullptr;       // Shell_TrayWnd / Shell_SecondaryTrayWnd
+        HWND container = nullptr;  // classic: ReBarWindow32 (main) / WorkerW (other monitors)
+        HWND taskList = nullptr;   // classic: MSTaskSwWClass (main) / MSTaskListWClass (other monitors)
+        HWND notify = nullptr;     // TrayNotifyWnd (main taskbar only)
+        HWND parent = nullptr;     // where the strip is inserted
+        HWND bar = nullptr;        // the strip
+        TaskbarKind kind = TaskbarKind::Classic;
+        bool primary = false;
+        bool vertical = false;
+        bool shrunk = false;  // the task list was made smaller for us
+        bool shown = false;
+        bool tracking = false;  // TrackMouseEvent armed
+        RECT natural{};         // task list rectangle without us (container coordinates)
+        std::deque<ULONGLONG> moves;
+        LayoutInput layout{};
+        std::unique_ptr<Renderer> renderer;
+        // Modern taskbars without a notification-area HWND: width of the right-side controls (UI Automation).
+        int reservePx = -1;  // -1 = unknown
+        int probedWidth = 0;
+        bool probing = false;
+        ULONGLONG probeStarted = 0;
+    };
+    static constexpr size_t kMaxTaskbars = 8;
+
     static LRESULT CALLBACK ControllerProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
     static LRESULT CALLBACK BarProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
     static void CALLBACK OnWinEvent(HWINEVENTHOOK hook, DWORD event, HWND hwnd, LONG idObject, LONG idChild,
@@ -50,15 +78,22 @@ private:
     LRESULT HandleBar(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 
     // Taskbar integration
-    bool Attach();
-    void Detach(bool restoreTaskbar);
-    bool IsAttached() const;
+    Taskbar* Attach(HWND tray, bool primary);  // nullptr when that taskbar is not ready
+    void Detach(Taskbar& t, bool restoreTaskbar);
+    void DetachAll(bool restoreTaskbar);
+    bool IsAttached(const Taskbar& t) const;
+    void SyncTaskbars();
+    Taskbar* FindBar(HWND bar);
     void RequestReposition();
     void Reposition();
-    void RestoreTaskList();
+    bool RepositionBar(Taskbar& t);  // true when the strip moved
+    void RestoreTaskList(Taskbar& t);
+    void ProbeTrayEdge(Taskbar& t);
+    void UpdateCrashRestore();
 
     // Data and drawing
     void Render(bool force = false);
+    void RenderBar(Taskbar& t, bool force);
     void OnSample();
     void OnAnimationTick();
     void RebuildItems();
@@ -94,34 +129,21 @@ private:
     void RunSensorsTool(bool install);
 
     // Menu and commands
-    void ShowMenu(POINT screen);
+    void ShowMenu(HWND bar, POINT screen);
     void Execute(UINT command);
     void Quit();
 
     HINSTANCE instance_ = nullptr;
     HWND controller_ = nullptr;
-    HWND bar_ = nullptr;
     HWND cardWindow_ = nullptr;
     HPOWERNOTIFY displayNotify_ = nullptr;
 
     // Explorer windows.
-    TaskbarKind kind_ = TaskbarKind::Classic;
-    HWND tray_ = nullptr;      // Shell_TrayWnd
-    HWND rebar_ = nullptr;     // ReBarWindow32 (classic)
-    HWND taskList_ = nullptr;  // MSTaskSwWClass (classic)
-    HWND notify_ = nullptr;    // TrayNotifyWnd
-    HWND parent_ = nullptr;    // where our strip is inserted
-    HWINEVENTHOOK hook_ = nullptr;
+    std::vector<std::unique_ptr<Taskbar>> bars_;
+    std::unordered_map<DWORD, HWINEVENTHOOK> hooks_;  // per taskbar thread
     UINT taskbarCreated_ = 0;
-    RECT naturalTaskList_{};  // task list rectangle without us (ReBar coordinates)
-    std::deque<ULONGLONG> taskListMoves_;
-
-    bool vertical_ = false;
-    bool shrunk_ = false;
-    bool barShown_ = false;
-    bool hover_ = false;
-    bool pressed_ = false;
-    bool trackingMouse_ = false;
+    HWND hoverBar_ = nullptr;    // strip under the mouse (the card belongs to it)
+    HWND pressedBar_ = nullptr;  // strip where the left button went down
     bool animating_ = false;
     bool repositionPending_ = false;
     bool quitting_ = false;
@@ -135,10 +157,10 @@ private:
     POINT cardPosition_{};
     POINT cardSlide_{};
 
-    // Declaration order matters: renderer_ and card_ keep a reference to gfx_.
+    // Declaration order matters: the renderers and card_ keep a reference to gfx_.
     Gfx gfx_;
-    Renderer renderer_{gfx_};
     Card card_{gfx_};
+    Theme theme_{};
     Settings settings_;
     MetricsSampler sampler_;
     update::Updater updater_;
@@ -147,7 +169,6 @@ private:
     std::wstring notice_;             // transient message shown in the card
     ULONGLONG noticeUntil_ = 0;
     MetricsSnapshot snapshot_;
-    LayoutInput layout_{};
     i18n::Lang lang_ = i18n::Lang::English;
     bool light_ = false;
     bool highContrast_ = false;

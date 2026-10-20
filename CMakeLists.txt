@@ -39,6 +39,7 @@ add_library(sysbar_core STATIC
     src/i18n.cpp
     src/json.cpp
     src/logic.cpp
+    src/trayprobe.cpp
     src/metrics.cpp
     src/renderer.cpp
     src/sensorfeed.cpp
@@ -47,7 +48,7 @@ add_library(sysbar_core STATIC
 )
 target_include_directories(sysbar_core PUBLIC src)
 target_link_libraries(sysbar_core PUBLIC d2d1 dwrite dxgi gdi32 pdh shell32 ole32 advapi32 wtsapi32 winhttp bcrypt
-                      iphlpapi setupapi)
+                      iphlpapi setupapi uiautomationcore)
 sysbar_options(sysbar_core)
 
 add_executable(sys-bar WIN32 src/main.cpp src/resource.rc src/app.manifest)
@@ -58,6 +59,7 @@ if(SYSBAR_BUILD_TESTS)
     enable_testing()
     add_executable(sysbar-tests
         tests/test_main.cpp
+        tests/fake_taskbar.cpp
         tests/test_format.cpp
         tests/test_gpu.cpp
         tests/test_hardware.cpp

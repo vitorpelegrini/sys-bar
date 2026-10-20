@@ -1,6 +1,7 @@
 #include "test.h"
 
 #include "common.h"
+#include "fake_taskbar.h"
 
 #include <objbase.h>
 
@@ -37,10 +38,16 @@ std::string Narrow(const std::wstring& s) {
 
 }  // namespace t
 
-// Usage: sysbar-tests [--previews <dir>] [name-filter]
+// Usage: sysbar-tests [--previews <dir>] [name-filter] | --fake-taskbar classic|modern [seconds]
 int wmain(int argc, wchar_t** argv) {
     SetConsoleOutputCP(CP_UTF8);
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+
+    // Helper mode for tools/test-taskbars.ps1.
+    if (argc >= 3 && std::wstring(argv[1]) == L"--fake-taskbar") {
+        const int seconds = argc >= 4 ? _wtoi(argv[3]) : 60;
+        return RunFakeTaskbar(argv[2], seconds > 0 ? seconds : 60);
+    }
 
     std::wstring filter;
     for (int i = 1; i < argc; ++i) {

@@ -21,8 +21,9 @@ using Microsoft::WRL::ComPtr;
 // Private messages between the sampling thread and the controller window.
 constexpr UINT WM_APP_SAMPLE = WM_APP + 1;
 constexpr UINT WM_APP_REPOSITION = WM_APP + 2;
-constexpr UINT WM_APP_UPDATE = WM_APP + 3;   // wParam = update::State
-constexpr UINT WM_APP_SENSORS = WM_APP + 4;  // wParam = 1 install / 0 uninstall, lParam = exit code
+constexpr UINT WM_APP_UPDATE = WM_APP + 3;    // wParam = update::State
+constexpr UINT WM_APP_SENSORS = WM_APP + 4;   // wParam = 1 install / 0 uninstall, lParam = exit code
+constexpr UINT WM_APP_TRAYEDGE = WM_APP + 5;  // wParam = taskbar HWND, lParam = right controls width (-1 unknown)
 
 // Window identity, also used by `sys-bar.exe --quit` and the installer to find a running instance.
 constexpr wchar_t kControllerClass[] = L"SysBar.Controller";

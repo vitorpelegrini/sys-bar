@@ -77,6 +77,7 @@ void Settings::Load() {
     temperatureUnit = _wcsicmp(unit, L"C") == 0 ? L"C" : _wcsicmp(unit, L"F") == 0 ? L"F" : L"auto";
     colorByLoad = ReadBool(file, L"ColorByLoad", colorByLoad);
     clickOpensTaskManager = ReadBool(file, L"ClickOpensTaskManager", clickOpensTaskManager);
+    allTaskbars = ReadBool(file, L"AllTaskbars", allTaskbars);
     intervalMs = std::clamp<DWORD>(GetPrivateProfileIntW(kSection, L"IntervalMs", intervalMs, file.c_str()),
                                    kMinIntervalMs, kMaxIntervalMs);
     offsetDip = std::clamp(static_cast<int>(GetPrivateProfileIntW(kSection, L"OffsetDip", offsetDip, file.c_str())), 0,
@@ -108,6 +109,7 @@ void Settings::Save() const {
     WriteValue(file, L"DisksSeparate", std::to_wstring(disksSeparate));
     WriteValue(file, L"ColorByLoad", std::to_wstring(colorByLoad));
     WriteValue(file, L"ClickOpensTaskManager", std::to_wstring(clickOpensTaskManager));
+    WriteValue(file, L"AllTaskbars", std::to_wstring(allTaskbars));
     WriteValue(file, L"IntervalMs", std::to_wstring(intervalMs));
     WriteValue(file, L"OffsetDip", std::to_wstring(offsetDip));
     WriteValue(file, L"Language", language);

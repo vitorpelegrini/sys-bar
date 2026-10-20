@@ -60,6 +60,54 @@ TEST(Network_meter_turns_counters_into_rates) {
     CHECK(!meter.Update({}, 14'000).available);
 }
 
+TEST(Battery_from_power_status) {
+    SYSTEM_POWER_STATUS p{};
+    p.BatteryFlag = 128;  // desktop: no system battery
+    CHECK(!hw::FromPowerStatus(p).present);
+    p.BatteryFlag = 255;  // unknown
+    CHECK(!hw::FromPowerStatus(p).present);
+    p.BatteryFlag = 0;
+    p.BatteryLifePercent = 255;  // unknown percent
+    CHECK(!hw::FromPowerStatus(p).present);
+
+    p.BatteryLifePercent = 18;
+    p.ACLineStatus = 0;
+    p.BatteryLifeTime = 3000;
+    hw::BatteryReading b = hw::FromPowerStatus(p);
+    CHECK(b.present && !b.acOnline && !b.charging);
+    CHECK_EQ(b.percent, 18.0);
+    CHECK_EQ(b.secondsLeft.value_or(-1), 3000);
+
+    p.BatteryLifeTime = static_cast<DWORD>(-1);  // no estimate yet
+    CHECK(!hw::FromPowerStatus(p).secondsLeft);
+    p.BatteryLifeTime = 30u * 24 * 3600;  // nonsense
+    CHECK(!hw::FromPowerStatus(p).secondsLeft);
+
+    p.ACLineStatus = 1;
+    p.BatteryFlag = 8;  // charging
+    p.BatteryLifeTime = 5000;
+    b = hw::FromPowerStatus(p);
+    CHECK(b.acOnline && b.charging);
+    CHECK(!b.secondsLeft);  // plugged in: "time left" makes no sense
+
+    p.ACLineStatus = 255;  // unknown AC state
+    CHECK(!hw::FromPowerStatus(p).acOnline);
+}
+
+TEST(Fake_battery_for_manual_testing) {
+    hw::BatteryReading b;
+    CHECK(hw::ParseFakeBattery(L"18,0,0,-9.2,3000", b));
+    CHECK(b.present && !b.acOnline && !b.charging);
+    CHECK_NEAR(b.watts.value_or(0.0), -9.2, 1e-9);
+    CHECK_EQ(b.secondsLeft.value_or(-1), 3000);
+    CHECK(hw::ParseFakeBattery(L"80,1,1", b));
+    CHECK(b.charging && !b.watts && !b.secondsLeft);
+    CHECK(!hw::ParseFakeBattery(L"", b));
+    CHECK(!hw::ParseFakeBattery(L"150,0,0", b));
+    CHECK(!hw::ParseFakeBattery(L"50,x,0", b));
+    CHECK(!hw::ParseFakeBattery(L"50,0", b));
+}
+
 TEST(Network_and_battery_read_without_admin) {
     const auto interfaces = hw::ReadNetInterfaces();
     for (const auto& i : interfaces) {

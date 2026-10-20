@@ -119,6 +119,12 @@ struct BatteryReading {
     std::optional<double> watts;     // > 0 charging, < 0 discharging
 };
 
+// What GetSystemPowerStatus says about the battery (no battery, unknown state and bogus values handled).
+BatteryReading FromPowerStatus(const SYSTEM_POWER_STATUS& power);
+// "percent,ac,charging[,watts[,secondsLeft]]" (e.g. "18,0,0,-9.2,3000"): a simulated battery, for
+// testing the battery display on a desktop through the SYSBAR_FAKE_BATTERY environment variable.
+bool ParseFakeBattery(const std::wstring& text, BatteryReading& out);
+
 // Laptop battery: charge from GetSystemPowerStatus, power from the battery driver (no admin needed).
 class BatteryMeter {
 public:

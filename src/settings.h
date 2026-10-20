@@ -25,6 +25,7 @@ struct Settings {
     std::wstring fanRoles;                   // user corrections: "Fan #1=case;Fan #2=cpu"
     bool colorByLoad = true;
     bool clickOpensTaskManager = true;
+    bool allTaskbars = true;  // also on the taskbars of other monitors
     DWORD intervalMs = 1000;
     std::wstring language = L"auto";  // "auto" or an i18n code ("en", "pt", "zh-Hans", ...)
     // Extra space (DIPs) kept between the strip and the notification area. Lets users with

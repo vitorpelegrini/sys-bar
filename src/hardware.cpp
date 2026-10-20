@@ -276,21 +276,60 @@ void BatteryMeter::Close() {
     opened_ = false;
 }
 
-BatteryReading BatteryMeter::Read() {
+BatteryReading FromPowerStatus(const SYSTEM_POWER_STATUS& power) {
     BatteryReading reading;
-    SYSTEM_POWER_STATUS power{};
-    // BatteryFlag 128 = no system battery, 255 = unknown status.
-    if (!GetSystemPowerStatus(&power) || power.BatteryFlag == 128 || power.BatteryFlag == 255 ||
-        power.BatteryLifePercent > 100) {
-        if (opened_) Close();
-        return reading;
-    }
+    // BatteryFlag 128 = no system battery, 255 = unknown status; percent 255 = unknown.
+    if (power.BatteryFlag == 128 || power.BatteryFlag == 255 || power.BatteryLifePercent > 100) return reading;
     reading.present = true;
     reading.percent = power.BatteryLifePercent;
     reading.acOnline = power.ACLineStatus == 1;
     reading.charging = (power.BatteryFlag & 8) != 0;
-    if (!reading.acOnline && power.BatteryLifeTime != static_cast<DWORD>(-1)) {
+    // The estimate is only meaningful on battery; -1 = unknown, and anything beyond a few days is noise.
+    if (!reading.acOnline && power.BatteryLifeTime != static_cast<DWORD>(-1) &&
+        power.BatteryLifeTime < 7u * 24 * 3600) {
         reading.secondsLeft = static_cast<int>(power.BatteryLifeTime);
+    }
+    return reading;
+}
+
+bool ParseFakeBattery(const std::wstring& text, BatteryReading& out) {
+    double values[5] = {};
+    int count = 0;
+    size_t start = 0;
+    while (count < 5 && start <= text.size()) {
+        size_t end = text.find(L',', start);
+        if (end == std::wstring::npos) end = text.size();
+        const std::wstring item = text.substr(start, end - start);
+        wchar_t* stop = nullptr;
+        values[count] = std::wcstod(item.c_str(), &stop);
+        if (item.empty() || (stop && *stop)) return false;
+        ++count;
+        start = end + 1;
+    }
+    if (count < 3 || values[0] < 0.0 || values[0] > 100.0) return false;
+    out = {};
+    out.present = true;
+    out.percent = values[0];
+    out.acOnline = values[1] != 0.0;
+    out.charging = values[2] != 0.0;
+    if (count >= 4 && values[3] != 0.0) out.watts = values[3];
+    if (count >= 5 && values[4] > 0.0) out.secondsLeft = static_cast<int>(values[4]);
+    return true;
+}
+
+BatteryReading BatteryMeter::Read() {
+    static const std::wstring fake = [] {
+        wchar_t value[64] = {};
+        const DWORD n = GetEnvironmentVariableW(L"SYSBAR_FAKE_BATTERY", value, 64);
+        return n > 0 && n < 64 ? std::wstring(value) : std::wstring();
+    }();
+    if (BatteryReading simulated; !fake.empty() && ParseFakeBattery(fake, simulated)) return simulated;
+
+    SYSTEM_POWER_STATUS power{};
+    BatteryReading reading = GetSystemPowerStatus(&power) ? FromPowerStatus(power) : BatteryReading{};
+    if (!reading.present) {
+        if (opened_) Close();
+        return reading;
     }
 
     if (!opened_) Open();

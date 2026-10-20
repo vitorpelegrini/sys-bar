@@ -262,6 +262,31 @@ TEST(Disk_strip_labels) {
     CHECK_EQ(logic::DiskStripLabel(DiskKind::Unknown, L"F:", 3, L"DISCO"), std::wstring(L"DISCO F:"));
 }
 
+TEST(Right_controls_of_a_modern_taskbar) {
+    const RECT tray{0, 1040, 1920, 1088};
+    // Centered task buttons, then tray icons + clock + "show desktop" against the right edge.
+    std::vector<RECT> e = {
+        {0, 1040, 1920, 1088},  // the taskbar itself (container)
+        {800, 1040, 840, 1088},
+        {840, 1040, 880, 1088},
+        {880, 1040, 920, 1088},  // task buttons
+        {1700, 1040, 1730, 1088},
+        {1732, 1040, 1762, 1088},  // tray icons
+        {1766, 1040, 1900, 1088},  // clock
+        {1906, 1040, 1920, 1088},  // show desktop
+        {0, 0, 0, 0},              // empty
+        {-500, 1040, -400, 1088},  // another monitor
+    };
+    CHECK_EQ(logic::RightControlsWidth(tray, e, 12), 220);
+    // Nothing at the right edge: unknown.
+    CHECK_EQ(logic::RightControlsWidth(tray, {{800, 1040, 840, 1088}}, 12), -1);
+    // Task buttons running into the clock: the cluster would cover half the bar, so it is rejected.
+    std::vector<RECT> crowded;
+    for (int x = 600; x < 1920; x += 40) crowded.push_back({x, 1040, x + 40, 1088});
+    CHECK_EQ(logic::RightControlsWidth(tray, crowded, 12), -1);
+    CHECK_EQ(logic::RightControlsWidth({0, 0, 0, 0}, e, 12), -1);
+}
+
 TEST(Fan_role_corrections) {
     CHECK(logic::ParseFanRoles(L"").empty());
     auto roles = logic::ParseFanRoles(L"Fan #1=case; Fan #2 = CPU;bogus;Fan #3=toaster;=cpu");

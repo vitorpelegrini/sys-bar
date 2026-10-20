@@ -93,6 +93,34 @@ CardPlacement PlaceCard(const CardInput& in) {
     return out;
 }
 
+int RightControlsWidth(const RECT& tray, const std::vector<RECT>& elements, int maxGapPx) {
+    const int width = Width(tray);
+    if (width <= 0 || tray.bottom <= tray.top) return -1;
+    std::vector<RECT> candidates;
+    for (const RECT& r : elements) {
+        if (r.right <= r.left || r.bottom <= r.top) continue;
+        // Inside the taskbar (a little slack for borders), and not a container spanning much of it.
+        if (r.left < tray.left - 2 || r.right > tray.right + 2 || r.bottom <= tray.top || r.top >= tray.bottom)
+            continue;
+        if (Width(r) > width * 2 / 5) continue;
+        candidates.push_back(r);
+    }
+    // Grow the cluster leftwards from the right edge while the next element is close enough.
+    int edge = tray.right;
+    bool any = false;
+    for (bool grew = true; grew;) {
+        grew = false;
+        for (const RECT& r : candidates) {
+            if (r.left < edge && r.right >= edge - maxGapPx) {
+                edge = r.left;
+                grew = any = true;
+            }
+        }
+    }
+    const int reserve = tray.right - edge;
+    return any && reserve <= width / 2 ? reserve : -1;
+}
+
 std::vector<MetricId> VisibleMetrics(const Settings& s, const Availability& a) {
     std::vector<MetricId> out;
     if (s.showCpu) out.push_back(MetricId::Cpu);

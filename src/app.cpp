@@ -2,6 +2,7 @@
 
 #include "format.h"
 #include "logic.h"
+#include "trayprobe.h"
 #include "version.h"
 
 #include <objbase.h>
@@ -43,10 +44,13 @@ constexpr float kCardFadeOutStep = 0.25f;
 constexpr int kCardSlideDip = 6;
 constexpr int kCardGapDip = 10;
 
-constexpr int kModernGapDip = 4;                   // space between the strip and the Windows 11 tray
-constexpr int kModernFallbackRightDip = 380;       // used only when the tray area cannot be located
-constexpr size_t kMaxTaskListMoves = 12;           // tug-of-war guard against Explorer...
-constexpr ULONGLONG kTaskListMoveWindowMs = 2000;  // ...per time window
+constexpr int kModernGapDip = 4;                       // space between the strip and the Windows 11 tray
+constexpr int kModernFallbackRightDip = 380;           // used only when the tray area cannot be located
+constexpr int kModernSecondaryFallbackRightDip = 160;  // other monitors: clock and notifications only
+constexpr ULONGLONG kTrayProbeIntervalMs = 60'000;     // the right-side controls are measured again...
+constexpr ULONGLONG kTrayProbeTimeoutMs = 30'000;      // ...and a stuck measurement is abandoned
+constexpr size_t kMaxTaskListMoves = 12;               // tug-of-war guard against Explorer...
+constexpr ULONGLONG kTaskListMoveWindowMs = 2000;      // ...per time window
 constexpr DWORD kWindows11Build = 22000;
 constexpr DWORD kDarkMenusBuild = 18362;  // Windows 10 1903
 
@@ -75,6 +79,7 @@ enum Command : UINT {
     kCmdTemperatureF,
     kCmdShowNet,
     kCmdShowBattery,
+    kCmdAllTaskbars,
     kCmdInterval0 = 200,  // + index into kIntervals
     kCmdLanguageAuto = 300,
     kCmdLanguage0 = 301,  // + i18n::Lang
@@ -94,7 +99,7 @@ struct CrashRestore {
     HWND taskList = nullptr;
     RECT rect{};
     bool active = false;
-} g_crashRestore;
+} g_crashRestore[8];
 
 void Log(const wchar_t* format, ...) {
     wchar_t buffer[512];
@@ -128,10 +133,11 @@ void Log(const wchar_t* format, ...) {
 }
 
 LONG WINAPI OnCrash(EXCEPTION_POINTERS*) {
-    // Explorer would keep the task list shrunk until its next layout pass: restore it right away.
-    if (g_crashRestore.active && IsWindow(g_crashRestore.taskList)) {
-        const RECT& r = g_crashRestore.rect;
-        SetWindowPos(g_crashRestore.taskList, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top,
+    // Explorer would keep the task lists shrunk until its next layout pass: restore them right away.
+    for (const CrashRestore& restore : g_crashRestore) {
+        if (!restore.active || !IsWindow(restore.taskList)) continue;
+        const RECT& r = restore.rect;
+        SetWindowPos(restore.taskList, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top,
                      SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
     }
     return EXCEPTION_CONTINUE_SEARCH;
@@ -277,7 +283,7 @@ int App::Run(HINSTANCE instance) {
     }
 
     sampler_.Stop();
-    Detach(true);
+    DetachAll(true);
     g_app = nullptr;
     return static_cast<int>(msg.wParam);
 }
@@ -286,73 +292,113 @@ int App::Run(HINSTANCE instance) {
 // Taskbar integration
 // ---------------------------------------------------------------------------------------------------
 
-bool App::Attach() {
-    tray_ = FindWindowW(L"Shell_TrayWnd", nullptr);
-    if (!tray_) return false;
-    notify_ = FindWindowExW(tray_, nullptr, L"TrayNotifyWnd", nullptr);
+namespace {
+
+// Windows 11 builds a taskbar without HWNDs for its controls. SYSBAR_FORCE_MODERN=1 takes the modern
+// path on any build when the classic structure is absent (used by the multi-monitor integration test).
+bool ModernTaskbars() {
+    static const bool forced = [] {
+        wchar_t value[4] = {};
+        return GetEnvironmentVariableW(L"SYSBAR_FORCE_MODERN", value, 4) == 1 && value[0] == L'1';
+    }();
+    return forced || WindowsBuild() >= kWindows11Build;
+}
+
+}  // namespace
+
+App::Taskbar* App::Attach(HWND tray, bool primary) {
+    auto t = std::make_unique<Taskbar>();
+    t->tray = tray;
+    t->primary = primary;
+    // Primary: Shell_TrayWnd > ReBarWindow32 > MSTaskSwWClass, plus the notification area.
+    // Other monitors: Shell_SecondaryTrayWnd > WorkerW > MSTaskListWClass (the clock has no HWND we need).
+    if (primary) {
+        t->notify = FindWindowExW(tray, nullptr, L"TrayNotifyWnd", nullptr);
+        t->container = FindWindowExW(tray, nullptr, L"ReBarWindow32", nullptr);
+        t->taskList = t->container ? FindWindowExW(t->container, nullptr, L"MSTaskSwWClass", nullptr) : nullptr;
+    } else {
+        t->container = FindWindowExW(tray, nullptr, L"WorkerW", nullptr);
+        t->taskList = t->container ? FindWindowExW(t->container, nullptr, L"MSTaskListWClass", nullptr) : nullptr;
+    }
 
     // Decide by structure, not by version: Windows 11 with a restored classic taskbar (ExplorerPatcher,
-    // StartAllBack...) still has a visible ReBar + task list and needs the classic path.
-    rebar_ = FindWindowExW(tray_, nullptr, L"ReBarWindow32", nullptr);
-    taskList_ = rebar_ ? FindWindowExW(rebar_, nullptr, L"MSTaskSwWClass", nullptr) : nullptr;
+    // StartAllBack...) still has a visible task list inside its container and needs the classic path.
     RECT listRect{};
-    const bool classicVisible = taskList_ && IsWindowVisible(rebar_) && IsWindowVisible(taskList_) &&
-                                GetWindowRect(taskList_, &listRect) && listRect.right > listRect.left &&
+    const bool classicVisible = t->taskList && IsWindowVisible(t->container) && IsWindowVisible(t->taskList) &&
+                                GetWindowRect(t->taskList, &listRect) && listRect.right > listRect.left &&
                                 listRect.bottom > listRect.top;
     if (classicVisible) {
-        kind_ = TaskbarKind::Classic;
-        parent_ = rebar_;
-        naturalTaskList_ = ToParent(rebar_, taskList_);
-    } else if (WindowsBuild() >= kWindows11Build) {
-        kind_ = TaskbarKind::Modern;
-        parent_ = tray_;
-        rebar_ = taskList_ = nullptr;
+        t->kind = TaskbarKind::Classic;
+        t->parent = t->container;
+        t->natural = ToParent(t->container, t->taskList);
+    } else if (ModernTaskbars()) {
+        t->kind = TaskbarKind::Modern;
+        t->parent = tray;
+        t->container = t->taskList = nullptr;
     } else {
-        Log(L"taskbar not ready (no visible task list yet)");
-        tray_ = rebar_ = taskList_ = notify_ = nullptr;
-        return false;
+        return nullptr;  // not ready yet (Explorer still building it): tried again on the next pass
     }
 
+    t->renderer = std::make_unique<Renderer>(gfx_);
+    t->renderer->SetTheme(theme_);
     // WS_EX_NOPARENTNOTIFY: no synchronous WM_PARENTNOTIFY round-trips to Explorer on every click.
-    bar_ = CreateWindowExW(WS_EX_LAYERED | WS_EX_NOPARENTNOTIFY, kBarClass, kControllerTitle,
-                           WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 1, 1, parent_, nullptr, instance_, this);
-    if (!bar_) {
+    t->bar = CreateWindowExW(WS_EX_LAYERED | WS_EX_NOPARENTNOTIFY, kBarClass, kControllerTitle,
+                             WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 1, 1, t->parent, nullptr, instance_, this);
+    if (!t->bar) {
         Log(L"CreateWindowEx(strip) failed: %lu", GetLastError());
-        tray_ = rebar_ = taskList_ = notify_ = parent_ = nullptr;
-        return false;
+        return nullptr;
     }
+    if (!accessibleName_.empty()) SetWindowTextW(t->bar, accessibleName_.c_str());
 
-    // Only the taskbar thread's own windows: Explorer file windows live in the same process.
+    // Layout changes of the taskbar windows are watched on their own thread (out of context).
     DWORD pid = 0;
-    const DWORD thread = GetWindowThreadProcessId(tray_, &pid);
-    hook_ = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr, OnWinEvent, pid, thread,
-                            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-    Log(L"attached (%s taskbar)", kind_ == TaskbarKind::Classic ? L"classic" : L"modern");
-    return true;
+    const DWORD thread = GetWindowThreadProcessId(tray, &pid);
+    if (thread && !hooks_.count(thread)) {
+        if (HWINEVENTHOOK hook =
+                SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE, nullptr, OnWinEvent, pid,
+                                thread, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS)) {
+            hooks_[thread] = hook;
+        }
+    }
+    Log(L"attached to the %s taskbar (%s)", primary ? L"main" : L"secondary",
+        t->kind == TaskbarKind::Classic ? L"classic" : L"modern");
+    bars_.push_back(std::move(t));
+    return bars_.back().get();
 }
 
-void App::RestoreTaskList() {
-    if (kind_ != TaskbarKind::Classic || !shrunk_ || !IsWindow(rebar_) || !IsWindow(taskList_)) return;
-    // Recompute the natural rectangle from the current ReBar layout (toolbars respected).
+void App::RestoreTaskList(Taskbar& t) {
+    if (t.kind != TaskbarKind::Classic || !t.shrunk || !IsWindow(t.container) || !IsWindow(t.taskList)) return;
+    // Recompute the natural rectangle from the current layout (toolbars respected).
     logic::ClassicInput in;
-    GetClientRect(rebar_, &in.rebarClient);
-    in.taskList = ToParent(rebar_, taskList_);
-    in.vertical = vertical_;
-    for (HWND child = GetWindow(rebar_, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) {
-        if (child != taskList_ && child != bar_ && IsWindowVisible(child))
-            in.toolbars.push_back(ToParent(rebar_, child));
+    GetClientRect(t.container, &in.rebarClient);
+    in.taskList = ToParent(t.container, t.taskList);
+    in.vertical = t.vertical;
+    for (HWND child = GetWindow(t.container, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) {
+        if (child != t.taskList && child != t.bar && IsWindowVisible(child))
+            in.toolbars.push_back(ToParent(t.container, child));
     }
     const RECT natural = logic::PlaceClassic(in).natural;
-    SetWindowPos(taskList_, nullptr, natural.left, natural.top, natural.right - natural.left,
+    SetWindowPos(t.taskList, nullptr, natural.left, natural.top, natural.right - natural.left,
                  natural.bottom - natural.top, SWP_NOZORDER | SWP_NOACTIVATE);
+    t.shrunk = false;
 }
 
-void App::Detach(bool restoreTaskbar) {
-    if (hook_) UnhookWinEvent(hook_), hook_ = nullptr;
-    if (restoreTaskbar) RestoreTaskList();
-    shrunk_ = false;
-    g_crashRestore.active = false;
+void App::Detach(Taskbar& t, bool restoreTaskbar) {
+    if (restoreTaskbar) RestoreTaskList(t);
+    if (t.bar == hoverBar_ || t.bar == pressedBar_) {
+        hoverBar_ = pressedBar_ = nullptr;
+        HideCard();
+    }
+    if (t.bar && IsWindow(t.bar)) DestroyWindow(t.bar);
+    t.bar = nullptr;
+}
 
+void App::DetachAll(bool restoreTaskbar) {
+    for (auto& t : bars_) Detach(*t, restoreTaskbar);
+    bars_.clear();
+    for (auto& [thread, hook] : hooks_) UnhookWinEvent(hook);
+    hooks_.clear();
+    UpdateCrashRestore();
     if (cardWindow_) {
         KillTimer(controller_, kCardDelayTimer);
         KillTimer(controller_, kCardFadeTimer);
@@ -360,17 +406,75 @@ void App::Detach(bool restoreTaskbar) {
         cardVisible_ = cardWanted_ = false;
         cardAlpha_ = 0.0f;
     }
-    if (bar_ && IsWindow(bar_)) DestroyWindow(bar_);
-    bar_ = nullptr;
-    barShown_ = hover_ = pressed_ = trackingMouse_ = false;
-    tray_ = rebar_ = taskList_ = notify_ = parent_ = nullptr;
-    taskListMoves_.clear();
+    hoverBar_ = pressedBar_ = nullptr;
     accessibleName_.clear();
 }
 
-bool App::IsAttached() const {
-    return bar_ && IsWindow(bar_) && tray_ && IsWindow(tray_) && IsWindow(parent_) &&
-           (kind_ == TaskbarKind::Modern || IsWindow(taskList_)) && FindWindowW(L"Shell_TrayWnd", nullptr) == tray_;
+bool App::IsAttached(const Taskbar& t) const {
+    if (!t.bar || !IsWindow(t.bar) || !IsWindow(t.tray) || !IsWindow(t.parent)) return false;
+    if (t.kind == TaskbarKind::Classic && !IsWindow(t.taskList)) return false;
+    // After an Explorer restart a new Shell_TrayWnd exists while the old handle may linger briefly.
+    return !t.primary || FindWindowW(L"Shell_TrayWnd", nullptr) == t.tray;
+}
+
+App::Taskbar* App::FindBar(HWND bar) {
+    for (auto& t : bars_) {
+        if (t->bar == bar) return t.get();
+    }
+    return nullptr;
+}
+
+void App::SyncTaskbars() {
+    // The taskbars that should carry a strip: the main one, and those on other monitors.
+    std::vector<std::pair<HWND, bool>> wanted;
+    if (HWND primary = FindWindowW(L"Shell_TrayWnd", nullptr)) wanted.emplace_back(primary, true);
+    if (settings_.allTaskbars) {
+        for (HWND w = FindWindowExW(nullptr, nullptr, L"Shell_SecondaryTrayWnd", nullptr);
+             w && wanted.size() < kMaxTaskbars; w = FindWindowExW(nullptr, w, L"Shell_SecondaryTrayWnd", nullptr)) {
+            if (IsWindowVisible(w)) wanted.emplace_back(w, false);
+        }
+    }
+    auto isWanted = [&](HWND tray) {
+        return std::any_of(wanted.begin(), wanted.end(), [&](const auto& w) { return w.first == tray; });
+    };
+
+    // Strips whose taskbar went away (monitor unplugged, Explorer restarted, option turned off).
+    for (auto it = bars_.begin(); it != bars_.end();) {
+        Taskbar& t = **it;
+        if (IsAttached(t) && isWanted(t.tray)) {
+            ++it;
+            continue;
+        }
+        // Give the task list its space back only when it still exists (not after an Explorer crash).
+        Detach(t, IsWindow(t.container) && IsWindow(t.taskList));
+        it = bars_.erase(it);
+    }
+    // Unhook threads that no longer own any taskbar (Explorer restarted).
+    for (auto it = hooks_.begin(); it != hooks_.end();) {
+        const bool used = std::any_of(bars_.begin(), bars_.end(), [&](const auto& t) {
+            return GetWindowThreadProcessId(t->tray, nullptr) == it->first;
+        });
+        if (used) {
+            ++it;
+        } else {
+            UnhookWinEvent(it->second);
+            it = hooks_.erase(it);
+        }
+    }
+    for (const auto& [tray, primary] : wanted) {
+        const bool known = std::any_of(bars_.begin(), bars_.end(), [&](const auto& t) { return t->tray == tray; });
+        if (!known) Attach(tray, primary);
+    }
+}
+
+void App::UpdateCrashRestore() {
+    // Fixed storage: the crash handler must not allocate.
+    size_t n = 0;
+    for (const auto& t : bars_) {
+        if (n >= std::size(g_crashRestore)) break;
+        if (t->kind == TaskbarKind::Classic && t->shrunk) g_crashRestore[n++] = {t->taskList, t->natural, true};
+    }
+    for (; n < std::size(g_crashRestore); ++n) g_crashRestore[n].active = false;
 }
 
 void App::RequestReposition() {
@@ -382,84 +486,115 @@ void App::RequestReposition() {
 void App::Reposition() {
     repositionPending_ = false;
     if (quitting_ || !snapshot_.valid || displayOff_ || locked_) return;
-    if (!IsAttached()) {
-        Detach(false);
-        if (!Attach()) return;
+    SyncTaskbars();
+    RebuildItems();
+    bool cardBarMoved = false;
+    for (auto& t : bars_) {
+        if (RepositionBar(*t) && t->bar == hoverBar_) cardBarMoved = true;
     }
+    UpdateCrashRestore();
+    if (cardBarMoved && cardVisible_) UpdateCard(true);  // the card follows the strip
+}
 
-    const UINT dpi = std::max<UINT>(GetDpiForWindow(tray_), USER_DEFAULT_SCREEN_DPI);
+bool App::RepositionBar(Taskbar& t) {
+    const UINT dpi = std::max<UINT>(GetDpiForWindow(t.tray), USER_DEFAULT_SCREEN_DPI);
     RECT trayRect{};
-    GetWindowRect(tray_, &trayRect);
-    vertical_ = kind_ == TaskbarKind::Classic && (trayRect.bottom - trayRect.top) > (trayRect.right - trayRect.left);
+    GetWindowRect(t.tray, &trayRect);
+    t.vertical = t.kind == TaskbarKind::Classic && (trayRect.bottom - trayRect.top) > (trayRect.right - trayRect.left);
 
     RECT target{};
-    if (kind_ == TaskbarKind::Classic) {
+    if (t.kind == TaskbarKind::Classic) {
         logic::ClassicInput in;
-        GetClientRect(rebar_, &in.rebarClient);
-        in.taskList = ToParent(rebar_, taskList_);
-        in.vertical = vertical_;
-        for (HWND child = GetWindow(rebar_, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) {
-            if (child != taskList_ && child != bar_ && IsWindowVisible(child)) {
-                in.toolbars.push_back(ToParent(rebar_, child));
+        GetClientRect(t.container, &in.rebarClient);
+        in.taskList = ToParent(t.container, t.taskList);
+        in.vertical = t.vertical;
+        for (HWND child = GetWindow(t.container, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) {
+            if (child != t.taskList && child != t.bar && IsWindowVisible(child)) {
+                in.toolbars.push_back(ToParent(t.container, child));
             }
         }
         // The strip is as thick as the task list row (handles multi-row taskbars too).
-        layout_ = {dpi, vertical_,
-                   vertical_ ? in.taskList.right - in.taskList.left : in.taskList.bottom - in.taskList.top};
-        if (layout_.thicknessPx <= 0) return;
-        RebuildItems();
-        in.strip = renderer_.Layout(layout_, items_);
+        t.layout = {dpi, t.vertical,
+                    t.vertical ? in.taskList.right - in.taskList.left : in.taskList.bottom - in.taskList.top};
+        if (t.layout.thicknessPx <= 0) return false;
+        in.strip = t.renderer->Layout(t.layout, items_);
         const logic::ClassicPlacement placed = logic::PlaceClassic(in);
-        naturalTaskList_ = placed.natural;
+        t.natural = placed.natural;
 
         if (!SameRect(in.taskList, placed.taskList)) {
             const ULONGLONG now = GetTickCount64();
-            while (!taskListMoves_.empty() && now - taskListMoves_.front() > kTaskListMoveWindowMs) {
-                taskListMoves_.pop_front();
-            }
-            if (taskListMoves_.size() < kMaxTaskListMoves) {
-                taskListMoves_.push_back(now);
+            while (!t.moves.empty() && now - t.moves.front() > kTaskListMoveWindowMs) t.moves.pop_front();
+            if (t.moves.size() < kMaxTaskListMoves) {
+                t.moves.push_back(now);
                 const RECT& r = placed.taskList;
-                SetWindowPos(taskList_, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top,
+                SetWindowPos(t.taskList, nullptr, r.left, r.top, r.right - r.left, r.bottom - r.top,
                              SWP_NOZORDER | SWP_NOACTIVATE);
-                shrunk_ = true;
+                t.shrunk = true;
             } else {
                 Log(L"task list keeps being reset by Explorer; backing off");
             }
         }
-        g_crashRestore = {taskList_, naturalTaskList_, shrunk_};
         target = placed.strip;
     } else {
         logic::ModernInput in;
-        GetClientRect(tray_, &in.trayClient);
-        if (!IsWindow(notify_)) notify_ = FindWindowExW(tray_, nullptr, L"TrayNotifyWnd", nullptr);
-        if (notify_ && IsWindowVisible(notify_)) in.notify = ToParent(tray_, notify_);
-        layout_ = {dpi, false, in.trayClient.bottom - in.trayClient.top};
-        if (layout_.thicknessPx <= 0) return;
-        RebuildItems();
-        in.strip = renderer_.Layout(layout_, items_);
+        GetClientRect(t.tray, &in.trayClient);
+        if (t.primary) {
+            if (!IsWindow(t.notify)) t.notify = FindWindowExW(t.tray, nullptr, L"TrayNotifyWnd", nullptr);
+            if (t.notify && IsWindowVisible(t.notify)) in.notify = ToParent(t.tray, t.notify);
+        }
+        // Without a usable notification-area window (other monitors, newer Windows 11 builds), the
+        // taskbar's own right-side controls (clock, tray icons) are measured through UI Automation.
+        if (!logic::IsPlausibleNotifyRect(in.trayClient, in.notify)) {
+            ProbeTrayEdge(t);
+            if (t.reservePx > 0) {
+                in.notify = in.trayClient;
+                in.notify.left = std::max(in.trayClient.left, in.trayClient.right - t.reservePx);
+            }
+        }
+        t.layout = {dpi, false, in.trayClient.bottom - in.trayClient.top};
+        if (t.layout.thicknessPx <= 0) return false;
+        in.strip = t.renderer->Layout(t.layout, items_);
         in.gapPx = MulDiv(kModernGapDip, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI);
         in.offsetPx = MulDiv(settings_.offsetDip, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI);
-        in.fallbackRightPx = MulDiv(kModernFallbackRightDip, static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI);
+        in.fallbackRightPx = MulDiv(t.primary ? kModernFallbackRightDip : kModernSecondaryFallbackRightDip,
+                                    static_cast<int>(dpi), USER_DEFAULT_SCREEN_DPI);
         target = logic::PlaceModern(in);
     }
 
-    const RECT current = ToParent(parent_, bar_);
+    const RECT current = ToParent(t.parent, t.bar);
     const bool moved = !SameRect(current, target);
     if (moved) {
-        SetWindowPos(bar_, HWND_TOP, target.left, target.top, target.right - target.left, target.bottom - target.top,
+        SetWindowPos(t.bar, HWND_TOP, target.left, target.top, target.right - target.left, target.bottom - target.top,
                      SWP_NOACTIVATE);
-    } else if (GetWindow(bar_, GW_HWNDPREV)) {
+    } else if (GetWindow(t.bar, GW_HWNDPREV)) {
         // Explorer may re-order its children (e.g. the Windows 11 XAML bridge): stay on top.
-        SetWindowPos(bar_, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        SetWindowPos(t.bar, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 
-    Render(moved);
-    if (!barShown_) {
-        ShowWindow(bar_, SW_SHOWNA);
-        barShown_ = true;
+    RenderBar(t, moved);
+    if (!t.shown) {
+        ShowWindow(t.bar, SW_SHOWNA);
+        t.shown = true;
     }
-    if (moved && cardVisible_) UpdateCard(true);  // the card follows the strip
+    return moved;
+}
+
+void App::ProbeTrayEdge(Taskbar& t) {
+    // UI Automation talks to Explorer across processes: never on the UI thread, which shares its input
+    // queue with the taskbar. Measured again when the taskbar changes size, and once a minute.
+    RECT tray{};
+    GetWindowRect(t.tray, &tray);
+    const int width = tray.right - tray.left;
+    const ULONGLONG now = GetTickCount64();
+    if (t.probing && now - t.probeStarted < kTrayProbeTimeoutMs) return;
+    if (t.reservePx >= 0 && width == t.probedWidth && now - t.probeStarted < kTrayProbeIntervalMs) return;
+    t.probing = true;
+    t.probeStarted = now;
+    t.probedWidth = width;
+    std::thread([tray = t.tray, controller = controller_] {
+        const int reserve = trayprobe::MeasureRightControls(tray);
+        PostMessageW(controller, WM_APP_TRAYEDGE, reinterpret_cast<WPARAM>(tray), static_cast<LPARAM>(reserve));
+    }).detach();
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -616,26 +751,32 @@ logic::Availability App::Available() const {
 }
 
 void App::Render(bool force) {
-    if (!bar_ || layout_.thicknessPx <= 0) return;
+    if (bars_.empty()) return;
     RebuildItems();
-    renderer_.Layout(layout_, items_);
-    if (!force && !renderer_.NeedsPaint(items_, hover_)) return;  // nothing visible changed
-    if (!renderer_.Paint(items_, hover_)) {
+    for (auto& t : bars_) RenderBar(*t, force);
+}
+
+void App::RenderBar(Taskbar& t, bool force) {
+    if (!t.bar || !t.renderer || t.layout.thicknessPx <= 0) return;
+    const bool hover = t.bar == hoverBar_;
+    t.renderer->Layout(t.layout, items_);
+    if (!force && !t.renderer->NeedsPaint(items_, hover)) return;  // nothing visible changed
+    if (!t.renderer->Paint(items_, hover)) {
         // Render target recreated (rare): redo the layout and try once more.
-        renderer_.Layout(layout_, items_);
-        if (!renderer_.Paint(items_, hover_)) return;
+        t.renderer->Layout(t.layout, items_);
+        if (!t.renderer->Paint(items_, hover)) return;
     }
-    renderer_.Present(bar_);
+    t.renderer->Present(t.bar);
 }
 
 void App::UpdateAccessibleName() {
     // Screen readers (Narrator) read the window text of the strip.
-    if (!bar_) return;
+    if (bars_.empty()) return;
     std::wstring name = L"sys-bar";
     for (const ItemView& item : items_) name += L" · " + item.label + L" " + item.strong + item.weak;
     if (name != accessibleName_) {
         accessibleName_ = name;
-        SetWindowTextW(bar_, name.c_str());
+        for (const auto& t : bars_) SetWindowTextW(t->bar, name.c_str());
     }
 }
 
@@ -741,9 +882,9 @@ void App::RefreshTheme(bool force) {
     if (!force && light == light_ && highContrast == highContrast_) return;
     light_ = light;
     highContrast_ = highContrast;
-    const Theme theme = CurrentTheme();
-    renderer_.SetTheme(theme);
-    card_.SetTheme(theme);
+    theme_ = CurrentTheme();
+    for (auto& t : bars_) t->renderer->SetTheme(theme_);
+    card_.SetTheme(theme_);
     ApplyMenuTheme(light_ && !highContrast_);
     Render(true);
     if (cardVisible_) UpdateCard(false);
@@ -752,9 +893,9 @@ void App::RefreshTheme(bool force) {
 void App::ApplyLanguage() {
     i18n::Lang chosen;
     lang_ = i18n::FromCode(settings_.language, chosen) ? chosen : i18n::FromSystem();
-    const Theme theme = CurrentTheme();
-    renderer_.SetTheme(theme);
-    card_.SetTheme(theme);
+    theme_ = CurrentTheme();
+    for (auto& t : bars_) t->renderer->SetTheme(theme_);
+    card_.SetTheme(theme_);
 }
 
 void App::SetPaused(bool paused) {
@@ -986,15 +1127,16 @@ void App::PresentCard() {
 }
 
 void App::UpdateCard(bool reposition) {
-    if (!cardWindow_ || !bar_) return;
+    const Taskbar* t = FindBar(hoverBar_);
+    if (!cardWindow_ || !t) return;
     const CardModel model = BuildCardModel();
     MONITORINFO mi{sizeof(mi)};
-    GetMonitorInfoW(MonitorFromWindow(bar_, MONITOR_DEFAULTTONEAREST), &mi);
-    const int dpi = static_cast<int>(layout_.dpi);
+    GetMonitorInfoW(MonitorFromWindow(t->bar, MONITOR_DEFAULTTONEAREST), &mi);
+    const int dpi = static_cast<int>(t->layout.dpi);
     const int gapPx = MulDiv(kCardGapDip, dpi, USER_DEFAULT_SCREEN_DPI);
     // The card must fit between the taskbar and the other edge of the screen (the work area).
     const int room = mi.rcWork.bottom - mi.rcWork.top;
-    const SIZE size = card_.Measure(layout_.dpi, model, std::max(room - 2 * gapPx, 200));
+    const SIZE size = card_.Measure(t->layout.dpi, model, std::max(room - 2 * gapPx, 200));
     if (!card_.Paint(model)) {
         Log(L"card paint failed");
         return;
@@ -1002,13 +1144,13 @@ void App::UpdateCard(bool reposition) {
 
     if (reposition) {
         logic::CardInput in;
-        GetWindowRect(bar_, &in.strip);
+        GetWindowRect(t->bar, &in.strip);
         in.monitor = mi.rcMonitor;
         in.card = size;
         in.marginPx = card_.ShadowMarginPx();
         in.gapPx = gapPx;
         in.slidePx = MulDiv(kCardSlideDip, dpi, USER_DEFAULT_SCREEN_DPI);
-        in.verticalTaskbar = vertical_;
+        in.verticalTaskbar = t->vertical;
         const logic::CardPlacement placed = logic::PlaceCard(in);
         cardPosition_ = placed.position;
         cardSlide_ = placed.slide;
@@ -1017,7 +1159,7 @@ void App::UpdateCard(bool reposition) {
 }
 
 void App::ShowCard() {
-    if (!cardWindow_ || !bar_ || !snapshot_.valid) return;
+    if (!cardWindow_ || !FindBar(hoverBar_) || !snapshot_.valid) return;
     cardWanted_ = true;
     if (!cardVisible_) {
         cardAlpha_ = AnimationsAllowed() ? 0.0f : 1.0f;
@@ -1097,7 +1239,7 @@ void App::OnUpdateState(update::State state) {
 
 // Installs a downloaded update at a quiet moment: never while the user is looking at the card.
 void App::MaybeInstallUpdate() {
-    if (!installWhenReady_ || updater_.state() != update::State::Ready || hover_ || cardVisible_) return;
+    if (!installWhenReady_ || updater_.state() != update::State::Ready || hoverBar_ || cardVisible_) return;
     Log(L"installing update");
     installWhenReady_ = false;
     updater_.Install();  // the installer closes us cleanly and starts the new version
@@ -1172,7 +1314,7 @@ void App::RunSensorsTool(bool install) {
 // Menu and commands
 // ---------------------------------------------------------------------------------------------------
 
-void App::ShowMenu(POINT screen) {
+void App::ShowMenu(HWND bar, POINT screen) {
     HideCard();
     HMENU menu = CreatePopupMenu();
     HMENU intervals = CreatePopupMenu();
@@ -1315,6 +1457,9 @@ void App::ShowMenu(POINT screen) {
     }
     AppendMenuW(menu, check(settings_.colorByLoad), kCmdColorByLoad, S(i18n::Str::MenuHighlight));
     AppendMenuW(menu, check(settings_.clickOpensTaskManager), kCmdClickOpensTaskManager, S(i18n::Str::MenuClickOpens));
+    if (FindWindowExW(nullptr, nullptr, L"Shell_SecondaryTrayWnd", nullptr)) {  // only with several taskbars
+        AppendMenuW(menu, check(settings_.allTaskbars), kCmdAllTaskbars, S(i18n::Str::MenuAllTaskbars));
+    }
     AppendMenuW(menu, check(Settings::IsAutostartEnabled()), kCmdAutostart, S(i18n::Str::MenuAutostart));
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kCmdTaskManager, S(i18n::Str::MenuTaskManager));
@@ -1324,7 +1469,7 @@ void App::ShowMenu(POINT screen) {
     // The menu needs a foreground window to close properly when the user clicks elsewhere.
     SetForegroundWindow(controller_);
     TPMPARAMS params{sizeof(params)};
-    if (tray_) GetWindowRect(tray_, &params.rcExclude);
+    if (const Taskbar* t = FindBar(bar)) GetWindowRect(t->tray, &params.rcExclude);
     const UINT command = static_cast<UINT>(TrackPopupMenuEx(
         menu, TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY | TPM_VERTICAL, screen.x, screen.y, controller_, &params));
     PostMessageW(controller_, WM_NULL, 0, 0);
@@ -1332,8 +1477,9 @@ void App::ShowMenu(POINT screen) {
 
     // The pointer may have left the strip while the menu was open.
     POINT cursor{};
-    if (bar_ && GetCursorPos(&cursor) && WindowFromPoint(cursor) != bar_ && hover_) {
-        hover_ = trackingMouse_ = pressed_ = false;
+    if (hoverBar_ && GetCursorPos(&cursor) && WindowFromPoint(cursor) != hoverBar_) {
+        if (Taskbar* t = FindBar(hoverBar_)) t->tracking = false;
+        hoverBar_ = pressedBar_ = nullptr;
         Render();
     }
     if (command) Execute(command);
@@ -1365,6 +1511,11 @@ void App::Execute(UINT command) {
             settings_.colorByLoad = !settings_.colorByLoad;
             settings_.Save();
             RefreshTheme(true);
+            break;
+        case kCmdAllTaskbars:
+            settings_.allTaskbars = !settings_.allTaskbars;
+            settings_.Save();
+            Reposition();
             break;
         case kCmdClickOpensTaskManager:
             settings_.clickOpensTaskManager = !settings_.clickOpensTaskManager;
@@ -1448,7 +1599,7 @@ void App::Quit() {
     KillTimer(controller_, kHousekeepingTimer);
     KillTimer(controller_, kAnimationTimer);
     sampler_.Stop();
-    Detach(true);
+    DetachAll(true);
     if (displayNotify_) UnregisterPowerSettingNotification(displayNotify_), displayNotify_ = nullptr;
     WTSUnRegisterSessionNotification(controller_);
     if (cardWindow_) DestroyWindow(cardWindow_), cardWindow_ = nullptr;
@@ -1461,10 +1612,14 @@ void App::Quit() {
 
 void CALLBACK App::OnWinEvent(HWINEVENTHOOK, DWORD, HWND hwnd, LONG idObject, LONG idChild, DWORD, DWORD) {
     App* app = g_app;
-    if (!app || !hwnd || idObject != OBJID_WINDOW || idChild != CHILDID_SELF || hwnd == app->bar_) return;
-    if (hwnd == app->taskList_ || hwnd == app->rebar_ || hwnd == app->tray_ || hwnd == app->notify_ ||
-        (app->rebar_ && GetParent(hwnd) == app->rebar_)) {  // toolbars moving inside the ReBar
-        app->RequestReposition();
+    if (!app || !hwnd || idObject != OBJID_WINDOW || idChild != CHILDID_SELF) return;
+    for (const auto& t : app->bars_) {
+        if (hwnd == t->bar) return;
+        if (hwnd == t->taskList || hwnd == t->container || hwnd == t->tray || hwnd == t->notify ||
+            (t->container && GetParent(hwnd) == t->container)) {  // toolbars moving inside the ReBar
+            app->RequestReposition();
+            return;
+        }
     }
 }
 
@@ -1488,8 +1643,7 @@ LRESULT CALLBACK App::BarProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 LRESULT App::HandleController(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == taskbarCreated_ && taskbarCreated_ != 0) {
-        // Explorer restarted (or re-broadcast this message): rebuild only if our taskbar is gone.
-        if (!IsAttached()) Detach(false);
+        // Explorer restarted (or re-broadcast this message): strips whose taskbar is gone are rebuilt.
         Reposition();
         return 0;
     }
@@ -1497,6 +1651,17 @@ LRESULT App::HandleController(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_APP_SAMPLE: OnSample(); return 0;
         case WM_APP_REPOSITION: Reposition(); return 0;
+        case WM_APP_TRAYEDGE:
+            for (auto& t : bars_) {
+                if (t->tray != reinterpret_cast<HWND>(wp)) continue;
+                t->probing = false;
+                const int reserve = static_cast<int>(lp);
+                if (reserve != t->reservePx) {
+                    t->reservePx = reserve;
+                    RequestReposition();
+                }
+            }
+            return 0;
         case WM_APP_UPDATE: OnUpdateState(static_cast<update::State>(wp)); return 0;
         case WM_APP_SENSORS:
             Log(L"advanced sensors %s: exit code %lu", wp ? L"install" : L"uninstall", static_cast<DWORD>(lp));
@@ -1513,13 +1678,13 @@ LRESULT App::HandleController(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 case kAnimationTimer: OnAnimationTick(); break;
                 case kCardDelayTimer:
                     KillTimer(hwnd, kCardDelayTimer);
-                    if (hover_) ShowCard();
+                    if (hoverBar_) ShowCard();
                     break;
                 case kCardFadeTimer: OnCardFadeTick(); break;
                 case kUpdateTimer: OnUpdateTimer(); break;
                 case kNoticeTimer:
                     KillTimer(hwnd, kNoticeTimer);
-                    if (!hover_) HideCard();
+                    if (!hoverBar_) HideCard();
                     break;
             }
             return 0;
@@ -1562,7 +1727,7 @@ LRESULT App::HandleController(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 KillTimer(hwnd, kHousekeepingTimer);
                 KillTimer(hwnd, kAnimationTimer);
                 sampler_.Stop();
-                Detach(false);
+                DetachAll(false);
             }
             return 0;
         case WM_CLOSE: Quit(); return 0;
@@ -1574,47 +1739,57 @@ LRESULT App::HandleController(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 LRESULT App::HandleBar(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_MOUSEACTIVATE: return MA_NOACTIVATE;  // never steal focus from the app in use
-        case WM_MOUSEMOVE:
-            if (!trackingMouse_) {
+        case WM_MOUSEMOVE: {
+            Taskbar* t = FindBar(hwnd);
+            if (!t) return 0;
+            if (!t->tracking) {
                 TRACKMOUSEEVENT tme{sizeof(tme), TME_LEAVE, hwnd, 0};
-                trackingMouse_ = TrackMouseEvent(&tme) != FALSE;
+                t->tracking = TrackMouseEvent(&tme) != FALSE;
             }
-            if (!hover_) {
-                hover_ = true;
+            if (hoverBar_ != hwnd) {
+                if (hoverBar_) HideCard();  // moved straight from another monitor's strip
+                hoverBar_ = hwnd;
                 Render();
                 SetTimer(controller_, kCardDelayTimer, kCardDelayMs, nullptr);
             }
             return 0;
+        }
         case WM_MOUSELEAVE:
-            trackingMouse_ = pressed_ = false;
-            HideCard();
-            if (hover_) {
-                hover_ = false;
+            if (Taskbar* t = FindBar(hwnd)) t->tracking = false;
+            if (pressedBar_ == hwnd) pressedBar_ = nullptr;
+            if (hoverBar_ == hwnd) {
+                HideCard();
+                hoverBar_ = nullptr;
                 Render();
             }
             return 0;
         case WM_LBUTTONDOWN:
-            pressed_ = true;
+            pressedBar_ = hwnd;
             HideCard();
             return 0;
         case WM_RBUTTONDOWN: HideCard(); return 0;
         case WM_LBUTTONUP:
-            // Only a click that started on the strip counts (not a drag released over it).
-            if (pressed_ && settings_.clickOpensTaskManager) ShellOpen(L"taskmgr.exe");
-            pressed_ = false;
+            // Only a click that started on this strip counts (not a drag released over it).
+            if (pressedBar_ == hwnd && settings_.clickOpensTaskManager) ShellOpen(L"taskmgr.exe");
+            pressedBar_ = nullptr;
             return 0;
         case WM_RBUTTONUP: {
             POINT pt{static_cast<short>(LOWORD(lp)), static_cast<short>(HIWORD(lp))};
             ClientToScreen(hwnd, &pt);
-            ShowMenu(pt);
+            ShowMenu(hwnd, pt);
             return 0;
         }
         case WM_DPICHANGED_AFTERPARENT: RequestReposition(); return 0;
         case WM_NCDESTROY:
-            if (bar_ == hwnd) {
-                bar_ = nullptr;
-                barShown_ = hover_ = pressed_ = trackingMouse_ = false;
+            // Destroyed by us (Detach) or by Explorer tearing down its taskbar: forget the handle.
+            for (auto& t : bars_) {
+                if (t->bar == hwnd) {
+                    t->bar = nullptr;
+                    t->shown = t->tracking = false;
+                }
             }
+            if (hoverBar_ == hwnd) hoverBar_ = nullptr;
+            if (pressedBar_ == hwnd) pressedBar_ = nullptr;
             break;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
