@@ -577,3 +577,59 @@ TEST(Card_size_does_not_follow_live_values) {
     CHECK_EQ(low.cx, high.cx);
     CHECK_EQ(low.cy, high.cy);
 }
+
+namespace {
+
+// Saves a premultiplied BGRA bitmap as a PNG with real (straight) alpha, shadow included.
+void SaveWithAlpha(const Surface& s, const std::wstring& name) {
+    if (t::previewDir.empty() || !s.pixels()) return;
+    const int w = s.width(), h = s.height();
+    std::vector<uint32_t> out(static_cast<size_t>(w) * h);
+    for (size_t i = 0; i < out.size(); ++i) {
+        const uint32_t p = s.pixels()[i];
+        const uint32_t a = p >> 24;
+        auto channel = [&](int shift) {
+            const uint32_t c = (p >> shift) & 0xFF;
+            return a ? std::min<uint32_t>(255, (c * 255 + a / 2) / a) : 0u;
+        };
+        out[i] = (a << 24) | (channel(16) << 16) | (channel(8) << 8) | channel(0);
+    }
+    ComPtr<IWICImagingFactory> wic;
+    ComPtr<IWICBitmap> bitmap;
+    ComPtr<IWICStream> stream;
+    ComPtr<IWICBitmapEncoder> encoder;
+    ComPtr<IWICBitmapFrameEncode> frame;
+    const std::wstring path = t::previewDir + L"\\" + name + L".png";
+    if (FAILED(CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&wic))) ||
+        FAILED(wic->CreateBitmapFromMemory(w, h, GUID_WICPixelFormat32bppBGRA, w * 4, w * h * 4,
+                                           reinterpret_cast<BYTE*>(out.data()), &bitmap)) ||
+        FAILED(wic->CreateStream(&stream)) || FAILED(stream->InitializeFromFilename(path.c_str(), GENERIC_WRITE)) ||
+        FAILED(wic->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder)) ||
+        FAILED(encoder->Initialize(stream.Get(), WICBitmapEncoderNoCache)) ||
+        FAILED(encoder->CreateNewFrame(&frame, nullptr)) || FAILED(frame->Initialize(nullptr)) ||
+        FAILED(frame->WriteSource(bitmap.Get(), nullptr)) || FAILED(frame->Commit()) || FAILED(encoder->Commit())) {
+        t::Fail(__FILE__, __LINE__, "could not save " + t::Narrow(path));
+    }
+}
+
+}  // namespace
+
+TEST(Banner_card) {
+    // The hover card of the README banner (tools/update-banner.ps1 lays it over the artwork): the real card,
+    // in English, with the banner's four metrics.
+    if (t::previewDir.empty()) return;
+    using i18n::Str;
+    const auto lang = i18n::Lang::English;
+    CardModel model = DemoCard(lang);
+    model.rows.resize(4);
+    model.sensors.clear();
+    model.fans.clear();
+    model.sensorsTitle.clear();
+    model.footerRight = text::Chip(icon::kCheck, i18n::Get(lang, Str::CardUpToDate));
+    model.footerAccent = false;
+    Card card(SharedGfx());
+    card.SetTheme(MakeTheme(false));
+    card.Measure(141, model);  // the size of the artwork's card
+    CHECK(card.Paint(model));
+    SaveWithAlpha(card.surface(), L"banner-card");
+}
