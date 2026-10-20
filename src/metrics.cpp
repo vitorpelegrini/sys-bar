@@ -1,6 +1,7 @@
 #include "metrics.h"
 
 #include "format.h"
+#include "sensorfeed.h"
 
 #include <dxgi.h>
 #include <pdhmsg.h>
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cwchar>
+#include <cwctype>
 
 namespace {
 
@@ -92,6 +94,8 @@ uint64_t SumAdapterMemory(const PDH_FMT_COUNTERVALUE_ITEM_W* items, DWORD count,
     }
     return used;
 }
+
+MetricsSampler::MetricsSampler() : feed_(std::make_unique<feed::SensorFeed>()) {}
 
 MetricsSampler::~MetricsSampler() {
     Stop();
@@ -462,9 +466,54 @@ void MetricsSampler::CollectDisks(MetricsSnapshot& out, bool collected) {
     out.diskAvailable = !out.disks.empty();
 }
 
+namespace {
+
+std::wstring Normalized(const std::wstring& s) {
+    std::wstring out;
+    for (wchar_t c : s) {
+        if (c != L' ' && c != L'-' && c != L'_') out += static_cast<wchar_t>(std::towlower(c));
+    }
+    return out;
+}
+
+// "Samsung SSD 870 EVO 1TB" (LibreHardwareMonitor) vs "Samsung SSD 870 EVO 1TB" (storage IOCTL).
+bool SameDrive(const std::wstring& a, const std::wstring& b) {
+    const std::wstring x = Normalized(a), y = Normalized(b);
+    return !x.empty() && !y.empty() && (x.find(y) != std::wstring::npos || y.find(x) != std::wstring::npos);
+}
+
+}  // namespace
+
 void MetricsSampler::CollectSensors(MetricsSnapshot& out) {
-    if (out.cpuTemperature)
+    // Advanced sensors (optional service): CPU temperature, fans, SATA temperatures.
+    feed::Decoded advanced;
+    std::vector<SensorReading> fans, extraDrives;
+    if (feed_ && feed_->Read(advanced)) {
+        out.advancedSensors = true;
+        out.cpuTemperature = advanced.cpuTemperature;
+        for (SensorReading& r : advanced.readings) {
+            if (r.group == SensorGroup::Cpu) continue;  // already in cpuTemperature
+            if (r.kind == SensorKind::Fan) {
+                fans.push_back(std::move(r));
+                continue;
+            }
+            if (r.group == SensorGroup::Disk) {
+                // Complete the drives the native query could not read (SATA needs SMART/admin).
+                bool matched = false;
+                for (DiskSnapshot& disk : out.disks) {
+                    if (SameDrive(disk.model, r.name)) {
+                        if (!disk.temperature) disk.temperature = r.value;
+                        matched = true;
+                    }
+                }
+                if (!matched) extraDrives.push_back(std::move(r));
+            }
+        }
+    }
+
+    if (out.cpuTemperature) {
         out.sensors.push_back({SensorKind::Temperature, SensorGroup::Cpu, L"CPU", *out.cpuTemperature});
+    }
     for (size_t i = 0; i < adapters_.size(); ++i) {
         const hw::GpuReading reading = i == 0 ? hw::GpuReading{out.gpuTemperature, out.gpuFanRpm} : gpuSensors_.Read(i);
         if (reading.temperature) {
@@ -473,10 +522,12 @@ void MetricsSampler::CollectSensors(MetricsSnapshot& out) {
         if (reading.fanRpm)
             out.sensors.push_back({SensorKind::Fan, SensorGroup::Gpu, adapters_[i].name, *reading.fanRpm});
     }
+    for (SensorReading& fan : fans) out.sensors.push_back(std::move(fan));
     for (const DiskSnapshot& disk : out.disks) {
         if (!disk.temperature) continue;
         std::wstring name = disk.model.empty() ? L"Disk " + std::to_wstring(disk.number) : disk.model;
         if (!disk.letters.empty()) name += L" (" + disk.letters + L")";
         out.sensors.push_back({SensorKind::Temperature, SensorGroup::Disk, name, *disk.temperature});
     }
+    for (SensorReading& drive : extraDrives) out.sensors.push_back(std::move(drive));
 }

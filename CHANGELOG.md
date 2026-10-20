@@ -34,6 +34,10 @@ First public release.
 - Recovers automatically when Explorer restarts, the GPU driver resets or the display layout
   changes; pauses sampling while the display is off or the session is locked.
 - Installer (per-user, no administrator rights, x64 and ARM64) and portable zips.
+- Optional advanced sensors (x64): CPU temperature, motherboard/controller fans and SATA drive temperatures
+  through a small LocalSystem service built on LibreHardwareMonitorLib and the PawnIO driver. It is enabled
+  from the installer or the menu (one UAC prompt), runs from Program Files, publishes through read-only shared
+  memory and only samples while sys-bar is showing data.
 - Automatic updates: a daily check of GitHub Releases; installed copies download the new installer,
   verify its SHA-256 and install it silently, while portable copies show a notice. The version and an
   "Updates" submenu (check now, install automatically) are in the context menu.

@@ -67,6 +67,7 @@ enum Command : UINT {
     kCmdCheckUpdates,
     kCmdAutoUpdate,
     kCmdInstallUpdate,
+    kCmdAdvancedSensors,
     kCmdInterval0 = 200,  // + index into kIntervals
     kCmdLanguageAuto = 300,
     kCmdLanguage0 = 301,  // + i18n::Lang
@@ -746,7 +747,8 @@ CardModel App::BuildCardModel() const {
         }
         line->value = line->value.empty() ? value : line->value + L" · " + value;
     }
-    if (!model.sensors.empty()) model.sensorsTitle = S(i18n::Str::CardSensors);
+    if (!s.advancedSensors && !SensorsTool().empty()) model.sensorsHint = S(i18n::Str::CardSensorsHint);
+    if (!model.sensors.empty() || !model.sensorsHint.empty()) model.sensorsTitle = S(i18n::Str::CardSensors);
 
     // Notice: a message the user asked for (e.g. "you have the latest version"), else update news.
     if (!notice_.empty() && GetTickCount64() < noticeUntil_) {
@@ -916,6 +918,46 @@ std::wstring App::UpdateStatusText() const {
     }
 }
 // ---------------------------------------------------------------------------------------------------
+// Advanced sensors
+// ---------------------------------------------------------------------------------------------------
+
+std::wstring App::SensorsTool() const {
+#if defined(_M_X64)
+    wchar_t path[MAX_PATH * 2] = {};
+    const DWORD n = GetModuleFileNameW(nullptr, path, static_cast<DWORD>(std::size(path)));
+    std::wstring tool(path, n);
+    tool = tool.substr(0, tool.find_last_of(L'\\')) + L"\\sensors\\sys-bar-sensors.exe";
+    return GetFileAttributesW(tool.c_str()) == INVALID_FILE_ATTRIBUTES ? std::wstring() : tool;
+#else
+    return {};  // the PawnIO driver is x64-only
+#endif
+}
+
+// Runs the service installer elevated (UAC) on a worker thread and reports back with WM_APP_SENSORS.
+void App::RunSensorsTool(bool install) {
+    const std::wstring tool = SensorsTool();
+    if (tool.empty()) return;
+    std::thread([tool, install, controller = controller_] {
+        const HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+        SHELLEXECUTEINFOW info{sizeof(info)};
+        info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
+        info.lpVerb = L"runas";
+        info.lpFile = tool.c_str();
+        info.lpParameters = install ? L"--install" : L"--uninstall";
+        info.nShow = SW_HIDE;
+        DWORD code = ERROR_CANCELLED;
+        if (ShellExecuteExW(&info) && info.hProcess) {
+            WaitForSingleObject(info.hProcess, INFINITE);
+            GetExitCodeProcess(info.hProcess, &code);
+            CloseHandle(info.hProcess);
+        } else {
+            code = GetLastError();
+        }
+        if (SUCCEEDED(hr)) CoUninitialize();
+        PostMessageW(controller, WM_APP_SENSORS, install ? 1 : 0, static_cast<LPARAM>(code));
+    }).detach();
+}
+// ---------------------------------------------------------------------------------------------------
 // Menu and commands
 // ---------------------------------------------------------------------------------------------------
 
@@ -995,6 +1037,11 @@ void App::ShowMenu(POINT screen) {
         AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(updates), S(i18n::Str::MenuUpdates));
     }
 
+    if (!SensorsTool().empty()) {
+        AppendMenuW(
+            menu, check(snapshot_.advancedSensors), kCmdAdvancedSensors,
+            S(snapshot_.advancedSensors ? i18n::Str::MenuAdvancedSensorsActive : i18n::Str::MenuAdvancedSensors));
+    }
     AppendMenuW(menu, check(settings_.colorByLoad), kCmdColorByLoad, S(i18n::Str::MenuHighlight));
     AppendMenuW(menu, check(settings_.clickOpensTaskManager), kCmdClickOpensTaskManager, S(i18n::Str::MenuClickOpens));
     AppendMenuW(menu, check(Settings::IsAutostartEnabled()), kCmdAutostart, S(i18n::Str::MenuAutostart));
@@ -1057,6 +1104,7 @@ void App::Execute(UINT command) {
         case kCmdAbout: ShellOpen(SYSBAR_PROJECT_URL); break;
         case kCmdExit: Quit(); break;
         case kCmdIntervalCustom: break;
+        case kCmdAdvancedSensors: RunSensorsTool(!snapshot_.advancedSensors); break;
         case kCmdCheckUpdates:
             manualUpdateCheck_ = true;
             updater_.Check();
@@ -1152,6 +1200,10 @@ LRESULT App::HandleController(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_APP_SAMPLE: OnSample(); return 0;
         case WM_APP_REPOSITION: Reposition(); return 0;
         case WM_APP_UPDATE: OnUpdateState(static_cast<update::State>(wp)); return 0;
+        case WM_APP_SENSORS:
+            Log(L"advanced sensors %s: exit code %lu", wp ? L"install" : L"uninstall", static_cast<DWORD>(lp));
+            if (wp && lp == 0) ShowNotice(S(i18n::Str::MenuAdvancedSensorsActive));
+            return 0;
         case WM_TIMER:
             switch (wp) {
                 case kHousekeepingTimer:

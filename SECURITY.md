@@ -26,5 +26,16 @@ You should get an answer within a few days.
 - It reads performance counters, `GlobalMemoryStatusEx` and the DXGI adapter list. It writes only
   `%APPDATA%\sys-bar\settings.ini` and, when you enable it, the
   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\sys-bar` value.
+- **Advanced sensors (optional, x64):**
+  - They are enabled only after an explicit choice (installer checkbox or menu) and a UAC prompt.
+  - `sys-bar-sensors.exe --install` copies the service to `%ProgramFiles%\sys-bar\sensors`, where only
+    administrators can write. The LocalSystem service never runs from a user-writable folder.
+  - It installs the official PawnIO driver installer when needed (pinned by SHA-256 at build time) and
+    registers the `SysBarSensors` service.
+  - Readings are published in a shared-memory block that users can read but not write. Clients can only
+    signal an event ("someone is looking"). The service writes nothing else outside its own folder.
+  - It has no network access and no input from other processes except that event.
+  - Disabling the sensors from the menu, or uninstalling sys-bar, removes the service and its files.
+    PawnIO stays installed because other tools share it.
 - Release binaries are built from tagged sources by GitHub Actions; every artifact is published with
   its SHA-256 checksum.

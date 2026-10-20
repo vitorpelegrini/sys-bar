@@ -30,6 +30,12 @@
   buttons move aside to make room, so nothing is ever covered.
 - **The same numbers as Task Manager.** CPU uses `% Processor Utility`. RAM is total minus
   available. GPU is the busiest engine of any GPU. VRAM is dedicated video memory.
+- **Disk and temperatures.** Disk activity with read/write MB/s. Temperatures appear as small badges in the strip,
+  and the card has a sensors section.
+  - GPU temperature and fan, and NVMe temperatures, need no driver.
+  - The optional **advanced sensors** add CPU temperature, motherboard and controller fans, and SATA drive
+    temperatures (see below).
+- **Updates itself.** A daily check of GitHub Releases. Updates are verified by SHA-256 and installed silently.
 - **Hover card.** Shows the hardware model, peaks and a one-minute graph per metric. History above
   80% / 92% load turns amber / red.
 - **Light on resources.** It is a single ~500 KB native `.exe` (C++20, Win32, Direct2D) with no
@@ -87,6 +93,20 @@ extra keys:
 | `Language` | `auto` | `auto` or a code: `en`, `pt`, `es`, `fr`, `de`, `it`, `pl`, `tr`, `ru`, `uk`, `ja`, `ko`, `zh-Hans`, `zh-Hant`. |
 | `CheckUpdates` | `1` | Look for a new release once a day. |
 | `AutoUpdate` | `1` | Download, verify (SHA-256) and install updates silently (installed copies only). |
+
+## Advanced sensors
+
+Windows has no public API for CPU temperature or motherboard fans: reading them needs a kernel driver.
+sys-bar can add an optional component for this:
+
+- A small `sys-bar sensors` service, built on [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor),
+  which supports a very wide range of hardware.
+- The [PawnIO](https://github.com/namazso/PawnIO) driver. It is signed and open source, and FanControl and
+  LibreHardwareMonitor use it too.
+
+You can enable it in the installer, or later from the menu (**Enable advanced sensors**). It asks once for
+administrator rights. The service runs from `Program Files`, uses almost no CPU, and only reads sensors
+while sys-bar is showing them. Disabling it from the menu removes it. It is available on x64 only.
 
 ## FAQ
 

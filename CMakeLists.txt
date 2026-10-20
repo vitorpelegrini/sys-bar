@@ -41,6 +41,7 @@ add_library(sysbar_core STATIC
     src/logic.cpp
     src/metrics.cpp
     src/renderer.cpp
+    src/sensorfeed.cpp
     src/settings.cpp
     src/update.cpp
 )
@@ -63,6 +64,7 @@ if(SYSBAR_BUILD_TESTS)
         tests/test_logic.cpp
         tests/test_update.cpp
         tests/test_render.cpp
+        tests/test_sensorfeed.cpp
         tests/test_system.cpp
         src/app.manifest)
     target_link_libraries(sysbar-tests PRIVATE sysbar_core windowscodecs)

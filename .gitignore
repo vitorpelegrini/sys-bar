@@ -3,6 +3,8 @@ build/
 build-*/
 out/
 dist/
+sensors/bin/
+sensors/obj/
 
 # IDEs
 .vs/

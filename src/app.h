@@ -74,6 +74,10 @@ private:
     void ShowNotice(std::wstring text);
     std::wstring UpdateStatusText() const;
 
+    // Advanced sensors (optional service)
+    std::wstring SensorsTool() const;  // path of sys-bar-sensors.exe next to us, or empty
+    void RunSensorsTool(bool install);
+
     // Menu and commands
     void ShowMenu(POINT screen);
     void Execute(UINT command);

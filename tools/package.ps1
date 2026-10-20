@@ -10,6 +10,21 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
 $version = & "$PSScriptRoot/version.ps1"
+
+# Official PawnIO installer (GPL-2.0 driver, https://github.com/namazso/PawnIO), pinned by hash.
+$PawnIOVersion = '2.2.0'
+$PawnIOSha256 = '1f519a22e47187f70a1379a48ca604981c4fcf694f4e65b734aaa74a9fba3032'
+function Get-PawnIOSetup {
+    $cache = Join-Path $root "build/cache/PawnIO-$PawnIOVersion"
+    $file = Join-Path $cache 'PawnIO_setup.exe'
+    if (-not (Test-Path $file)) {
+        New-Item -ItemType Directory -Force $cache | Out-Null
+        Invoke-WebRequest "https://github.com/namazso/PawnIO.Setup/releases/download/$PawnIOVersion/PawnIO_setup.exe" -OutFile $file
+    }
+    $hash = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($hash -ne $PawnIOSha256) { Remove-Item $file; throw "PawnIO_setup.exe hash mismatch: $hash" }
+    $file
+}
 $dist = Join-Path $root 'dist'
 if (Test-Path $dist) { Get-ChildItem $dist -Recurse | Remove-Item -Recurse -Force }
 New-Item -ItemType Directory -Force $dist | Out-Null
@@ -33,7 +48,18 @@ foreach ($arch in $Architectures) {
     $stage = Join-Path $dist $arch
     New-Item -ItemType Directory -Force $stage | Out-Null
     Copy-Item "$buildDir/Release/sys-bar.exe" $stage
-    Copy-Item LICENSE, README.md, CHANGELOG.md $stage
+
+    # Advanced sensors service (x64 only: the PawnIO driver has no ARM64 build).
+    if ($arch -eq 'x64') {
+        dotnet build sensors/SysBar.Sensors.csproj -c Release -nologo -v q "-p:SysBarVersion=$version" | Out-Host
+        if ($LASTEXITCODE) { throw 'sensors build failed' }
+        $sensors = Join-Path $stage 'sensors'
+        New-Item -ItemType Directory -Force $sensors | Out-Null
+        Get-ChildItem sensors/bin/Release -File | Where-Object { $_.Extension -in '.exe', '.dll', '.config' } |
+            Copy-Item -Destination $sensors
+        Copy-Item (Get-PawnIOSetup) $sensors
+    }
+    Copy-Item LICENSE, THIRD-PARTY-NOTICES.md, README.md, CHANGELOG.md $stage
     Compress-Archive -Path "$stage/*" -DestinationPath (Join-Path $dist "sys-bar-$version-win-$arch.zip") -Force
 }
 

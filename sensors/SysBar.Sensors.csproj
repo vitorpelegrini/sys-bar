@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Optional "advanced sensors" service: CPU temperature, motherboard/controller fans and SATA
+       drive temperatures through LibreHardwareMonitorLib and the PawnIO driver. Runs as a Windows
+       service (LocalSystem) from Program Files and publishes readings to sys-bar through a read-only
+       shared-memory block. .NET Framework 4.7.2 ships with Windows 10 1803+ and Windows 11, so users
+       never install a runtime. -->
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AssemblyName>sys-bar-sensors</AssemblyName>
+    <RootNamespace>SysBar.Sensors</RootNamespace>
+    <PlatformTarget>x64</PlatformTarget>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\assets\sys-bar.ico</ApplicationIcon>
+    <Version Condition="'$(SysBarVersion)' != ''">$(SysBarVersion)</Version>
+    <Product>sys-bar</Product>
+    <Company>Vitor Pelegrini de Souza</Company>
+    <Copyright>Copyright (c) 2026 Vitor Pelegrini de Souza. MIT License.</Copyright>
+    <Description>sys-bar advanced sensors service</Description>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <Reference Include="System.ServiceProcess" />
+  </ItemGroup>
+
+</Project>

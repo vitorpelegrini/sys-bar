@@ -31,6 +31,13 @@
 - **Os mesmos números do Gerenciador de Tarefas.** A CPU usa `% Processor Utility`. A RAM é o
   total menos o disponível. A GPU é o engine mais ocupado de qualquer GPU. A VRAM é a memória de
   vídeo dedicada.
+- **Disco e temperaturas.** Atividade de disco com leitura/gravação em MB/s. As temperaturas aparecem em
+  pequenos badges na faixa, e o card tem uma seção de sensores.
+  - Temperatura e fan da GPU, e temperatura dos NVMe, sem precisar de driver.
+  - Os **sensores avançados** opcionais acrescentam a temperatura da CPU, as fans da placa-mãe e de
+    controladoras e a temperatura de discos SATA (veja abaixo).
+- **Se atualiza sozinho.** Consulta as Releases do GitHub uma vez por dia. As atualizações são verificadas por
+  SHA-256 e instaladas em silêncio.
 - **Card ao passar o mouse.** Mostra o modelo do hardware, os picos e um gráfico do último minuto
   para cada métrica. O histórico acima de 80% / 92% de carga fica âmbar / vermelho.
 - **Leve.** Um único `.exe` nativo de ~500 KB (C++20, Win32, Direct2D), sem dependências.
@@ -88,6 +95,20 @@ algumas chaves extras:
 | `Language` | `auto` | `auto` ou um código: `en`, `pt`, `es`, `fr`, `de`, `it`, `pl`, `tr`, `ru`, `uk`, `ja`, `ko`, `zh-Hans`, `zh-Hant`. |
 | `CheckUpdates` | `1` | Procura uma nova versão uma vez por dia. |
 | `AutoUpdate` | `1` | Baixa, verifica (SHA-256) e instala atualizações em silêncio (só na versão instalada). |
+
+## Sensores avançados
+
+O Windows não tem API pública para a temperatura da CPU nem para as fans da placa-mãe: ler esses dados
+exige um driver. O sys-bar pode adicionar um componente opcional para isso:
+
+- Um pequeno serviço `sys-bar sensors`, baseado no [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor),
+  que suporta uma enorme variedade de hardware.
+- O driver [PawnIO](https://github.com/namazso/PawnIO). Ele é assinado e open source, e também é usado
+  pelo FanControl e pelo LibreHardwareMonitor.
+
+Dá para ativar no instalador ou depois pelo menu (**Ativar sensores avançados**). Ele pede permissão de
+administrador uma única vez. O serviço roda de `Program Files`, quase não usa CPU e só lê os sensores
+enquanto o sys-bar os está mostrando. Desativar pelo menu o remove. Disponível só em x64.
 
 ## Perguntas frequentes
 

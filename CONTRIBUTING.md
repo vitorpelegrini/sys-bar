@@ -8,6 +8,7 @@ Thanks for helping! Bug reports, translations, ideas and pull requests are all w
 - [Visual Studio 2022](https://visualstudio.microsoft.com/) (or the Build Tools) with the
   **Desktop development with C++** workload
 - [CMake](https://cmake.org/) 3.20+ and PowerShell 7 (`pwsh`)
+- [.NET SDK 8+](https://dotnet.microsoft.com/download) to build the advanced sensors service
 - Optional: [Inno Setup 6](https://jrsoftware.org/isdl.php) to build the installer
 
 ```powershell
@@ -33,6 +34,10 @@ pwsh tools/package.ps1      # zips + installer in dist/, exactly like the releas
 | `src/format.*` | Pure text formatting |
 | `src/settings.*` | `settings.ini` and "Start with Windows" |
 | `tests/` | Test suite (tiny built-in framework, no dependencies) |
+| `src/hardware.*` | Native GPU (D3DKMT) and drive temperature sensors |
+| `src/sensorfeed.*` | Reader of the advanced sensors service (shared memory) |
+| `src/update.*`, `src/json.*` | Self-update through GitHub Releases |
+| `sensors/` | Advanced sensors service (C#, .NET Framework 4.7.2, LibreHardwareMonitorLib + PawnIO) |
 | `packaging/` | Inno Setup installer |
 | `tools/` | Build, packaging, icon and soak-test scripts |
 
@@ -62,6 +67,18 @@ For changes to the taskbar integration, also run the app and the soak test:
 
 ```powershell
 pwsh tools/soak.ps1 -Minutes 3 -HoverCycles 20   # CPU, memory, handles and GDI objects over time
+```
+
+## Advanced sensors service
+
+`sensors/` is a small Windows service. It reads CPU temperature, fans and SATA temperatures with
+LibreHardwareMonitorLib and publishes them through a read-only shared-memory block whose layout is
+documented in `sensors/SharedBlock.cs` and `src/sensorfeed.h`. The two must change together; the
+version field protects older clients.
+
+```powershell
+dotnet build sensors/SysBar.Sensors.csproj -c Release
+sensors\bin\Release\sys-bar-sensors.exe --console 15   # elevated terminal: print readings for 15 s
 ```
 
 ## Translations

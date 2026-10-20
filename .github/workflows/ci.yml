@@ -47,6 +47,9 @@ jobs:
           -DSYSBAR_WARNINGS_AS_ERRORS=ON -DSYSBAR_BUILD_TESTS=${{ matrix.tests }}
       - name: Build
         run: cmake --build build --config Release -- /m /nologo
+      - name: Build advanced sensors service
+        if: matrix.arch == 'x64'
+        run: dotnet build sensors/SysBar.Sensors.csproj -c Release -nologo
       - name: Test
         if: matrix.tests == 'ON'
         run: build\Release\sysbar-tests.exe --previews build\previews

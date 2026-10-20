@@ -3,9 +3,14 @@
 #include "common.h"
 #include "hardware.h"
 
+namespace feed {
+class SensorFeed;
+}
+
 #include <pdh.h>
 
 #include <atomic>
+#include <memory>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -56,6 +61,7 @@ struct MetricsSnapshot {
     uint64_t diskWriteBps = 0;
     std::vector<DiskSnapshot> disks;
 
+    bool advancedSensors = false;          // the advanced sensors service is publishing
     std::optional<double> cpuTemperature;  // °C (advanced sensors)
     std::optional<double> gpuTemperature;  // °C, main GPU
     std::optional<double> gpuFanRpm;
@@ -87,7 +93,7 @@ constexpr uint64_t kMinDedicatedVram = 256ull * 1024 * 1024;
 // threads share the input queue, so any stall on the UI thread would freeze the taskbar too.
 class MetricsSampler {
 public:
-    MetricsSampler() = default;
+    MetricsSampler();
     ~MetricsSampler();
     MetricsSampler(const MetricsSampler&) = delete;
     MetricsSampler& operator=(const MetricsSampler&) = delete;
@@ -152,6 +158,7 @@ private:
     std::vector<BYTE> diskBuffers_[3];
     hw::GpuSensors gpuSensors_;
     hw::StorageDevices storage_;
+    std::unique_ptr<feed::SensorFeed> feed_;                  // advanced sensors service (optional)
     std::unordered_map<int, ULONGLONG> lastTemperatureRead_;  // disk number -> tick
     std::wstring diskInstanceKey_;  // set of PDH disk instances; a change triggers re-enumeration
     std::unordered_map<std::wstring_view, double> engines_;
