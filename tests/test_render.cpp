@@ -182,12 +182,6 @@ CardModel DemoCard(i18n::Lang lang) {
 
 }  // namespace
 
-namespace t {
-void SaveProbe(const Surface& s, const std::wstring& name) {
-    SavePreview(s, name, 0x1A1A1A);
-}
-}  // namespace t
-
 TEST(Layout_width_never_depends_on_the_values) {
     // Zero jitter: the width depends only on the widest possible text, never on the current one.
     for (UINT dpi : {96u, 120u, 144u, 192u}) {
