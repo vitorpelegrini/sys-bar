@@ -23,7 +23,7 @@ TEST(Disk_instance_names_are_parsed) {
 TEST(Storage_devices_enumerate_without_admin) {
     // Every machine has at least one physical disk, and opening it for property queries needs no rights.
     hw::StorageDevices storage;
-    storage.Refresh();
+    storage.Refresh({0, 1, 2, 3, 4, 5, 6, 7});
     CHECK(storage.Find(0) != nullptr);
     for (int n = 0; n < 32; ++n) {
         const hw::DiskDevice* disk = storage.Find(n);

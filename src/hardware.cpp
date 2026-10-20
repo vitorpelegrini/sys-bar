@@ -74,7 +74,14 @@ GpuReading GpuSensors::Read(size_t index) {
 
 namespace {
 
-constexpr int kMaxPhysicalDrives = 32;
+constexpr int kTemperatureFailureLimit = 3;
+
+// No access rights requested: enough for property queries, no administrator needed.
+HANDLE OpenDrive(int number) {
+    wchar_t path[32];
+    swprintf_s(path, L"\\\\.\\PhysicalDrive%d", number);
+    return CreateFileW(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+}
 
 // A drive "incurs a seek penalty" when it has moving heads: that is how Windows itself tells HDD from SSD.
 std::optional<bool> SeekPenalty(HANDLE file) {
@@ -118,50 +125,52 @@ std::wstring ReadModel(HANDLE file, DiskKind& kind) {
 
 }  // namespace
 
-void StorageDevices::Refresh() {
-    Close();
-    for (int n = 0; n < kMaxPhysicalDrives; ++n) {
-        wchar_t path[32];
-        swprintf_s(path, L"\\\\.\\PhysicalDrive%d", n);
-        // No access rights requested: enough for property queries, no administrator needed.
-        HANDLE file = CreateFileW(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
-        if (file == INVALID_HANDLE_VALUE) continue;
-        Handle h;
-        h.file = file;
-        h.device.number = n;
-        h.device.model = ReadModel(file, h.device.kind);
-        disks_.push_back(std::move(h));
-    }
-}
-
-void StorageDevices::Close() {
-    for (Handle& h : disks_) {
-        if (h.file != INVALID_HANDLE_VALUE) CloseHandle(h.file);
-    }
+void StorageDevices::Refresh(const std::vector<int>& numbers) {
     disks_.clear();
+    for (int n : numbers) {
+        DiskDevice device;
+        device.number = n;
+        const HANDLE file = OpenDrive(n);
+        if (file != INVALID_HANDLE_VALUE) {
+            device.model = ReadModel(file, device.kind);
+            CloseHandle(file);
+        }
+        disks_.push_back(std::move(device));
+    }
 }
 
 void StorageDevices::UpdateTemperature(int number) {
-    for (Handle& h : disks_) {
-        if (h.device.number != number || !h.device.temperatureSupported) continue;
+    for (DiskDevice& device : disks_) {
+        if (device.number != number || !device.temperatureSupported) continue;
+        const HANDLE file = OpenDrive(number);
         STORAGE_PROPERTY_QUERY query{StorageDeviceTemperatureProperty, PropertyStandardQuery, {0}};
         alignas(8) BYTE buffer[512] = {};
         DWORD bytes = 0;
-        if (!DeviceIoControl(h.file, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), buffer, sizeof(buffer),
-                             &bytes, nullptr) ||
-            bytes < sizeof(STORAGE_TEMPERATURE_DATA_DESCRIPTOR)) {
-            h.device.temperatureSupported = false;  // e.g. SATA drives that need SMART (admin)
-            h.device.temperature.reset();
+        const bool ok = file != INVALID_HANDLE_VALUE &&
+                        DeviceIoControl(file, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), buffer,
+                                        sizeof(buffer), &bytes, nullptr) &&
+                        bytes >= sizeof(STORAGE_TEMPERATURE_DATA_DESCRIPTOR);
+        const DWORD error = ok ? ERROR_SUCCESS : GetLastError();
+        if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+        if (!ok) {
+            device.temperature.reset();
+            // Drives without the property (SATA needs SMART and admin) stop being asked at once; other
+            // errors (a busy USB bridge) only after a few in a row.
+            if (error == ERROR_INVALID_FUNCTION || error == ERROR_NOT_SUPPORTED || error == ERROR_INVALID_PARAMETER ||
+                ++device.temperatureFailures >= kTemperatureFailureLimit) {
+                device.temperatureSupported = false;
+            }
             return;
         }
+        device.temperatureFailures = 0;
         const auto* data = reinterpret_cast<const STORAGE_TEMPERATURE_DATA_DESCRIPTOR*>(buffer);
         // The first entry is the composite/drive temperature.
         if (data->InfoCount > 0) {
             const SHORT celsius = data->TemperatureInfo[0].Temperature;
             if (celsius > -40 && celsius < 150) {
-                h.device.temperature = static_cast<double>(celsius);
+                device.temperature = static_cast<double>(celsius);
             } else {
-                h.device.temperature.reset();
+                device.temperature.reset();
             }
         }
         return;
@@ -169,8 +178,8 @@ void StorageDevices::UpdateTemperature(int number) {
 }
 
 const DiskDevice* StorageDevices::Find(int number) const {
-    for (const Handle& h : disks_) {
-        if (h.device.number == number) return &h.device;
+    for (const DiskDevice& device : disks_) {
+        if (device.number == number) return &device;
     }
     return nullptr;
 }
@@ -216,6 +225,7 @@ NetRates NetworkMeter::Update(const std::vector<NetInterface>& now, ULONGLONG ti
     rates.wireless = !now.empty();
     const double seconds = lastTick_ && tickMs > lastTick_ ? static_cast<double>(tickMs - lastTick_) / 1000.0 : 0.0;
     double down = 0.0, up = 0.0;
+    std::vector<std::wstring> seen;
     std::unordered_map<uint64_t, NetInterface> next;
     for (const NetInterface& item : now) {
         if (const auto it = last_.find(item.luid); it != last_.end() && seconds > 0.0) {
@@ -226,7 +236,8 @@ NetRates NetworkMeter::Update(const std::vector<NetInterface>& now, ULONGLONG ti
         }
         rates.linkBps = std::max(rates.linkBps, item.linkBps);
         rates.wireless = rates.wireless && item.wireless;
-        if (rates.names.find(item.name) == std::wstring::npos) {
+        if (std::find(seen.begin(), seen.end(), item.name) == seen.end()) {  // "Ethernet 2" is not "Ethernet"
+            seen.push_back(item.name);
             rates.names += (rates.names.empty() ? L"" : L" + ") + item.name;
         }
         next.emplace(item.luid, item);
@@ -262,9 +273,21 @@ void BatteryMeter::Open() {
                                   nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (device.file == INVALID_HANDLE_VALUE) continue;
         DWORD wait = 0, bytes = 0;
-        if (DeviceIoControl(device.file, IOCTL_BATTERY_QUERY_TAG, &wait, sizeof(wait), &device.tag, sizeof(device.tag),
-                            &bytes, nullptr) &&
-            device.tag != 0) {
+        bool usable = DeviceIoControl(device.file, IOCTL_BATTERY_QUERY_TAG, &wait, sizeof(wait), &device.tag,
+                                      sizeof(device.tag), &bytes, nullptr) &&
+                      device.tag != 0;
+        if (usable) {
+            // Batteries reporting relative capacity (some UPS/HID units) give their rate in relative units,
+            // not milliwatts: no power reading from them.
+            BATTERY_QUERY_INFORMATION query{};
+            query.BatteryTag = device.tag;
+            query.InformationLevel = BatteryInformation;
+            BATTERY_INFORMATION information{};
+            usable = DeviceIoControl(device.file, IOCTL_BATTERY_QUERY_INFORMATION, &query, sizeof(query), &information,
+                                     sizeof(information), &bytes, nullptr) &&
+                     !(information.Capabilities & BATTERY_CAPACITY_RELATIVE);
+        }
+        if (usable) {
             devices_.push_back(device);
         } else {
             CloseHandle(device.file);
@@ -309,6 +332,9 @@ bool ParseFakeBattery(const std::wstring& text, BatteryReading& out) {
         ++count;
         start = end + 1;
     }
+    for (int i = 0; i < count; ++i) {
+        if (!std::isfinite(values[i])) return false;
+    }
     if (count < 3 || values[0] < 0.0 || values[0] > 100.0) return false;
     out = {};
     out.present = true;
@@ -316,7 +342,7 @@ bool ParseFakeBattery(const std::wstring& text, BatteryReading& out) {
     out.acOnline = values[1] != 0.0;
     out.charging = values[2] != 0.0;
     if (count >= 4 && values[3] != 0.0) out.watts = values[3];
-    if (count >= 5 && values[4] > 0.0) out.secondsLeft = static_cast<int>(values[4]);
+    if (count >= 5 && values[4] > 0.0) out.secondsLeft = static_cast<int>(std::min(values[4], 7.0 * 24 * 3600));
     return true;
 }
 
@@ -335,9 +361,13 @@ BatteryReading BatteryMeter::Read() {
         return reading;
     }
 
-    if (!opened_) Open();
+    const ULONGLONG now = GetTickCount64();
+    if (!opened_ && now >= nextOpen_) {
+        nextOpen_ = now + 30'000;  // enumeration is costly: at most every 30 s
+        Open();
+    }
     double milliwatts = 0.0;
-    bool known = false;
+    bool known = false, failed = false;
     for (const Device& device : devices_) {
         BATTERY_WAIT_STATUS wait{};
         wait.BatteryTag = device.tag;
@@ -345,12 +375,16 @@ BatteryReading BatteryMeter::Read() {
         DWORD bytes = 0;
         if (!DeviceIoControl(device.file, IOCTL_BATTERY_QUERY_STATUS, &wait, sizeof(wait), &status, sizeof(status),
                              &bytes, nullptr)) {
-            Close();  // the battery went away or its tag changed: enumerate again next time
+            failed = true;  // the battery went away or its tag changed: enumerate again (later)
             break;
         }
         if (status.Rate == static_cast<LONG>(BATTERY_UNKNOWN_RATE) || status.Rate == 0) continue;
         milliwatts += status.Rate;
         known = true;
+    }
+    if (failed) {
+        Close();
+        return reading;  // never a partial sum
     }
     if (known && std::abs(milliwatts) < 500'000.0) reading.watts = milliwatts / 1000.0;
     return reading;

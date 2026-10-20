@@ -130,6 +130,7 @@ private:
     void CollectSensors(MetricsSnapshot& out);
     bool ReadCpuFallback(double& value);
     bool ReadArray(PDH_HCOUNTER counter, DWORD format, std::vector<BYTE>& buffer, DWORD& count);
+    void AddGpuCounters();
 
     HWND notify_ = nullptr;
     UINT message_ = 0;
@@ -154,6 +155,8 @@ private:
     PDH_HCOUNTER diskWriteCounter_ = nullptr;
     std::vector<Adapter> adapters_;  // physical GPUs, main (largest dedicated memory) first
     ULONGLONG nextAdapterSearch_ = 0;
+    ULONGLONG nextCounterRetry_ = 0;
+    MetricsSnapshot lastDisks_;  // last good disk values, reused on a transient read failure
     int adapterMisses_ = 0;
     bool gpuSeen_ = false;     // latched: GPU counters have produced data at least once
     MetricsSnapshot lastGpu_;  // last good GPU values, reused on a transient read failure

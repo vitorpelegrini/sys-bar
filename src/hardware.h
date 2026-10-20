@@ -50,31 +50,24 @@ struct DiskDevice {
     std::wstring model;  // "Samsung SSD 980 PRO 1TB"
     DiskKind kind = DiskKind::Unknown;
     bool temperatureSupported = true;
+    int temperatureFailures = 0;        // transient errors in a row (busy USB bridges)
     std::optional<double> temperature;  // °C, last value read
 };
 
 // Model names and temperatures (IOCTL_STORAGE_QUERY_PROPERTY works without administrator rights
-// for NVMe and many SSDs; drives that do not answer are skipped from then on).
+// for NVMe and many SSDs; drives that do not answer are skipped from then on). A drive is only opened
+// for the duration of each query: a handle kept open would stop USB drives from being ejected.
 class StorageDevices {
 public:
-    StorageDevices() = default;
-    ~StorageDevices() { Close(); }
-    StorageDevices(const StorageDevices&) = delete;
-    StorageDevices& operator=(const StorageDevices&) = delete;
-
-    void Refresh();  // re-enumerates \\.\PhysicalDrive0..N
-    void Close();
+    void Refresh(const std::vector<int>& numbers);  // the physical drives PDH lists
+    void Close() { disks_.clear(); }
     // Reads the temperature of disk `number`. Callers only do it while the disk is active, so a
     // sleeping hard drive is never woken up just to report its temperature.
     void UpdateTemperature(int number);
     const DiskDevice* Find(int number) const;
 
 private:
-    struct Handle {
-        DiskDevice device;
-        HANDLE file = INVALID_HANDLE_VALUE;
-    };
-    std::vector<Handle> disks_;
+    std::vector<DiskDevice> disks_;
 };
 
 // "0 C: E:" -> number 0, letters "C: E:". Returns false for "_Total" and malformed names.
@@ -146,6 +139,7 @@ private:
     void Open();
     std::vector<Device> devices_;
     bool opened_ = false;
+    ULONGLONG nextOpen_ = 0;
 };
 
 }  // namespace hw

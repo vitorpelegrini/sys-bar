@@ -11,7 +11,17 @@ constexpr wchar_t kMappingName[] = L"Global\\SysBarSensors";
 constexpr wchar_t kWantedEventName[] = L"Global\\SysBarSensorsWanted";
 constexpr wchar_t kUpdateEventName[] = L"Global\\SysBarSensorsUpdate";
 constexpr wchar_t kServiceName[] = L"SysBarSensors";
-constexpr ULONGLONG kReopenMs = 10'000;  // the service is looked for again every 10 s
+constexpr ULONGLONG kReopenMs = 10'000;       // the service is looked for again every 10 s
+constexpr ULONGLONG kStaleReopenMs = 30'000;  // no valid data for this long: drop the mapping, open it anew
+
+// Trust: a "Global\\" file mapping can only be created by services and administrators
+// (SeCreateGlobalPrivilege), so a standard user cannot plant a fake block; every field is validated
+// anyway. The events carry no data: one created by someone else only makes our signal go nowhere.
+
+// Characters a name from another process may not carry into our UI: C0/C1 controls, DEL, bidi overrides.
+bool Displayable(wchar_t c) {
+    return c >= 0x20 && !(c >= 0x7F && c <= 0x9F) && !(c >= 0x202A && c <= 0x202E) && !(c >= 0x2066 && c <= 0x2069);
+}
 
 template <typename T>
 T Get(const uint8_t* p, size_t offset) {
@@ -50,7 +60,7 @@ bool Decode(const uint8_t* block, size_t size, int64_t nowFileTime, Decoded& out
         for (size_t c = 0; c < kNameChars; ++c) {
             const auto ch = Get<wchar_t>(e, 8 + c * sizeof(wchar_t));
             if (ch == L'\0') break;
-            name += (ch < 0x20) ? L' ' : ch;  // no control characters from another process
+            name += Displayable(ch) ? ch : L' ';
         }
         if (name.empty()) continue;
         SensorReading reading;
@@ -69,11 +79,17 @@ void SensorFeed::Open() {
     nextOpen_ = GetTickCount64() + kReopenMs;
     mapping_ = OpenFileMappingW(FILE_MAP_READ, FALSE, kMappingName);
     if (!mapping_) return;
+    lastGood_ = GetTickCount64();
     view_ = static_cast<const uint8_t*>(MapViewOfFile(mapping_, FILE_MAP_READ, 0, 0, kBlockSize));
     if (!view_) {
         Close();
         return;
     }
+    OpenWanted();
+}
+
+void SensorFeed::OpenWanted() {
+    // The service may create its event a moment after the mapping: looked for again until found.
     wanted_ = OpenEventW(EVENT_MODIFY_STATE, FALSE, kWantedEventName);
 }
 
@@ -96,6 +112,7 @@ void SensorFeed::RequestUpdate() {
 bool SensorFeed::Read(Decoded& out) {
     if (!view_ && GetTickCount64() >= nextOpen_) Open();
     if (!view_) return false;
+    if (!wanted_) OpenWanted();
     if (wanted_) SetEvent(wanted_);  // "someone is looking": keeps the service sampling
 
     // Sequence lock: copy the block and accept it only if the sequence was even and unchanged.
@@ -111,7 +128,18 @@ bool SensorFeed::Read(Decoded& out) {
             GetSystemTimeAsFileTime(&now);
             const int64_t now100ns = (static_cast<int64_t>(now.dwHighDateTime) << 32) | now.dwLowDateTime;
             // Stale data simply means the service is idle or starting: the request above wakes it up.
-            return Decode(copy, sizeof(copy), now100ns, out);
+            if (Decode(copy, sizeof(copy), now100ns, out)) {
+                lastGood_ = GetTickCount64();
+                return true;
+            }
+            // A different layout (the service updated itself) or a service gone for good: let go of this
+            // mapping so the service can create its new one, and look again later.
+            if (Get<uint32_t>(copy, 0) != kMagic || Get<uint32_t>(copy, 4) != kVersion ||
+                GetTickCount64() - lastGood_ > kStaleReopenMs) {
+                Close();
+                nextOpen_ = GetTickCount64() + kReopenMs;
+            }
+            return false;
         }
     }
     return false;  // still being written after several tries: use the next sample

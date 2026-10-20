@@ -21,6 +21,8 @@ constexpr ULONGLONG kDiskTemperatureMs = 5'000;              // drive temperatur
 constexpr ULONGLONG kServiceUpdateRetryMs = 30 * 60 * 1000;  // ask an outdated sensors service every 30 min
 constexpr UINT kMicrosoftVendor = 0x1414;                    // "Microsoft Basic Render Driver"
 constexpr UINT kBasicRenderDevice = 0x8c;
+constexpr DWORD kStopGraceMs = 1500;
+constexpr ULONGLONG kCounterRetryMs = 30'000;  // GPU counters missing at logon are added later
 
 bool IsValidStatus(DWORD status) {
     return status == PDH_CSTATUS_VALID_DATA || status == PDH_CSTATUS_NEW_DATA;
@@ -109,7 +111,11 @@ bool MetricsSampler::Start(HWND notify, UINT message, DWORD intervalMs) {
     intervalMs_ = intervalMs;
     stopEvent_ = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     wakeEvent_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-    if (!stopEvent_ || !wakeEvent_) return false;
+    if (!stopEvent_ || !wakeEvent_) {
+        if (stopEvent_) CloseHandle(stopEvent_), stopEvent_ = nullptr;
+        if (wakeEvent_) CloseHandle(wakeEvent_), wakeEvent_ = nullptr;
+        return false;
+    }
 
     {
         std::lock_guard lock(mutex_);
@@ -124,6 +130,10 @@ bool MetricsSampler::Start(HWND notify, UINT message, DWORD intervalMs) {
 void MetricsSampler::Stop() {
     if (thread_.joinable()) {
         SetEvent(stopEvent_);
+        // This runs on the UI thread, which shares its input queue with the taskbar: a sample stuck in a
+        // device query (a hung USB drive) is cancelled rather than waited for.
+        const HANDLE thread = thread_.native_handle();
+        if (WaitForSingleObject(thread, kStopGraceMs) == WAIT_TIMEOUT) CancelSynchronousIo(thread);
         thread_.join();
     }
     if (stopEvent_) CloseHandle(stopEvent_), stopEvent_ = nullptr;
@@ -168,6 +178,7 @@ void MetricsSampler::Run() {
                 // Resuming: start a fresh measurement window instead of averaging over the pause.
                 if (query_) PdhCollectQueryData(query_);
                 ReadCpuFallback(primed);
+                network_.Update(hw::ReadNetInterfaces(), GetTickCount64());
                 nextDue = GetTickCount64() + kFirstSampleDelayMs;
             }
             continue;
@@ -192,7 +203,7 @@ void MetricsSampler::Run() {
             info_.gpuName = names;
         }
         // One pending notification at most: a busy UI thread never gets a burst of stale samples.
-        if (!notifyPending_.exchange(true)) PostMessageW(notify_, message_, 0, 0);
+        if (!notifyPending_.exchange(true) && !PostMessageW(notify_, message_, 0, 0)) notifyPending_ = false;
 
         // Fixed cadence without drift; after a long stall (e.g. sleep) start over.
         const DWORD interval = intervalMs_.load();
@@ -217,14 +228,7 @@ bool MetricsSampler::OpenQuery() {
             cpuCounter_ = nullptr;
         }
     }
-    if (PdhAddEnglishCounterW(query_, L"\\GPU Engine(*)\\Utilization Percentage", 0, &gpuEngineCounter_) !=
-        ERROR_SUCCESS) {
-        gpuEngineCounter_ = nullptr;
-    }
-    if (PdhAddEnglishCounterW(query_, L"\\GPU Adapter Memory(*)\\Dedicated Usage", 0, &gpuMemoryCounter_) !=
-        ERROR_SUCCESS) {
-        gpuMemoryCounter_ = nullptr;
-    }
+    AddGpuCounters();
     // Physical disks: Task Manager's "active time" is 100 - % Idle Time.
     if (PdhAddEnglishCounterW(query_, L"\\PhysicalDisk(*)\\% Idle Time", 0, &diskIdleCounter_) != ERROR_SUCCESS ||
         PdhAddEnglishCounterW(query_, L"\\PhysicalDisk(*)\\Disk Read Bytes/sec", 0, &diskReadCounter_) !=
@@ -236,6 +240,20 @@ bool MetricsSampler::OpenQuery() {
     return true;
 }
 
+void MetricsSampler::AddGpuCounters() {
+    // The GPU counter sets can be missing early at logon (driver still loading): added later if so.
+    nextCounterRetry_ = GetTickCount64() + kCounterRetryMs;
+    if (!query_) return;
+    if (!gpuEngineCounter_ && PdhAddEnglishCounterW(query_, L"\\GPU Engine(*)\\Utilization Percentage", 0,
+                                                    &gpuEngineCounter_) != ERROR_SUCCESS) {
+        gpuEngineCounter_ = nullptr;
+    }
+    if (!gpuMemoryCounter_ && PdhAddEnglishCounterW(query_, L"\\GPU Adapter Memory(*)\\Dedicated Usage", 0,
+                                                    &gpuMemoryCounter_) != ERROR_SUCCESS) {
+        gpuMemoryCounter_ = nullptr;
+    }
+}
+
 void MetricsSampler::CloseQuery() {
     if (query_) PdhCloseQuery(query_);
     query_ = nullptr;
@@ -243,6 +261,8 @@ void MetricsSampler::CloseQuery() {
     diskIdleCounter_ = diskReadCounter_ = diskWriteCounter_ = nullptr;
     gpuSensors_.Close();
     storage_.Close();
+    diskInstanceKey_.clear();  // a later Start() enumerates the drives again
+    lastTemperatureRead_.clear();
 }
 
 // Lists the physical GPUs, main one (largest dedicated memory) first.
@@ -353,6 +373,7 @@ void MetricsSampler::CollectGpu(MetricsSnapshot& out, bool collected) {
     // Availability is latched once the counters produced data, so a transient failure (or a burst of
     // process churn) reuses the last values instead of making GPU/VRAM blink in and out.
     if (adapters_.empty() && GetTickCount64() >= nextAdapterSearch_) SelectAdapters();
+    if ((!gpuEngineCounter_ || !gpuMemoryCounter_) && GetTickCount64() >= nextCounterRetry_) AddGpuCounters();
     auto keepLast = [&] {
         out.gpuAvailable = gpuSeen_;
         out.gpu = lastGpu_.gpu;
@@ -394,19 +415,21 @@ void MetricsSampler::CollectGpu(MetricsSnapshot& out, bool collected) {
         sawAny |= saw;
     }
 
+    if (!engineOk && !memoryOk) return keepLast();  // nothing read: not a sign that the adapter changed
     if (!sawAny) {
         // The LUID changes when the driver restarts or updates: enumerate the adapters again.
         if (++adapterMisses_ >= kAdapterMissLimit) SelectAdapters();
         return keepLast();
     }
     adapterMisses_ = 0;
-    if (!engineOk || !memoryOk) return keepLast();
+    if (!engineOk) return keepLast();
 
     gpuSeen_ = true;
     out.gpuAvailable = true;
     out.gpu = busiest;
-    out.vramTotal = vramTotal;
-    out.vramUsed = std::min(vramUsed, vramTotal);
+    // Without the memory counter the load is still shown; VRAM is hidden rather than wrong.
+    out.vramTotal = memoryOk ? vramTotal : 0;
+    out.vramUsed = memoryOk ? std::min(vramUsed, vramTotal) : 0;
     lastGpu_ = out;
 }
 
@@ -415,7 +438,15 @@ void MetricsSampler::CollectDisks(MetricsSnapshot& out, bool collected) {
     const PDH_HCOUNTER counters[3] = {diskIdleCounter_, diskReadCounter_, diskWriteCounter_};
     DWORD counts[3] = {};
     for (int i = 0; i < 3; ++i) {
-        if (!ReadArray(counters[i], PDH_FMT_DOUBLE | PDH_FMT_NOCAP100, diskBuffers_[i], counts[i])) return;
+        if (!ReadArray(counters[i], PDH_FMT_DOUBLE | PDH_FMT_NOCAP100, diskBuffers_[i], counts[i])) {
+            // A transient read failure: keep the last disks instead of making the section blink.
+            out.disks = lastDisks_.disks;
+            out.diskActive = lastDisks_.diskActive;
+            out.diskReadBps = lastDisks_.diskReadBps;
+            out.diskWriteBps = lastDisks_.diskWriteBps;
+            out.diskAvailable = lastDisks_.diskAvailable;
+            return;
+        }
     }
     const auto* idle = reinterpret_cast<const PDH_FMT_COUNTERVALUE_ITEM_W*>(diskBuffers_[0].data());
     const auto* read = reinterpret_cast<const PDH_FMT_COUNTERVALUE_ITEM_W*>(diskBuffers_[1].data());
@@ -443,15 +474,17 @@ void MetricsSampler::CollectDisks(MetricsSnapshot& out, bool collected) {
         disk.writeBps = static_cast<uint64_t>(valueOf(write, counts[2], idle[i].szName));
         out.disks.push_back(std::move(disk));
     }
-    if (key != diskInstanceKey_) {  // a disk was added or removed: refresh models and handles
+    if (key != diskInstanceKey_) {  // a disk was added or removed: read the models again
         diskInstanceKey_ = key;
-        storage_.Refresh();
+        std::vector<int> numbers;
+        for (const DiskSnapshot& disk : out.disks) numbers.push_back(disk.number);
+        storage_.Refresh(numbers);
     }
 
     const ULONGLONG now = GetTickCount64();
     for (DiskSnapshot& disk : out.disks) {
         // Temperatures are only read while a disk is busy anyway, never waking a sleeping drive.
-        const bool busy = disk.active > 0.0 || disk.readBps > 0 || disk.writeBps > 0;
+        const bool busy = disk.readBps > 0 || disk.writeBps > 0 || disk.active >= 1.0;  // not idle-time noise
         ULONGLONG& last = lastTemperatureRead_[disk.number];
         if (busy && now - last >= kDiskTemperatureMs) {
             storage_.UpdateTemperature(disk.number);
@@ -467,6 +500,11 @@ void MetricsSampler::CollectDisks(MetricsSnapshot& out, bool collected) {
         out.diskWriteBps += disk.writeBps;
     }
     out.diskAvailable = !out.disks.empty();
+    lastDisks_.disks = out.disks;
+    lastDisks_.diskActive = out.diskActive;
+    lastDisks_.diskReadBps = out.diskReadBps;
+    lastDisks_.diskWriteBps = out.diskWriteBps;
+    lastDisks_.diskAvailable = out.diskAvailable;
 }
 
 namespace {
@@ -504,6 +542,7 @@ void MetricsSampler::CollectSensors(MetricsSnapshot& out) {
             nextServiceUpdate_ = now + kServiceUpdateRetryMs;
         }
         out.cpuTemperature = advanced.cpuTemperature;
+        std::vector<bool> consumed(out.disks.size(), false);
         for (SensorReading& r : advanced.readings) {
             if (r.group == SensorGroup::Cpu) continue;  // already in cpuTemperature
             if (r.kind == SensorKind::Fan) {
@@ -511,13 +550,14 @@ void MetricsSampler::CollectSensors(MetricsSnapshot& out) {
                 continue;
             }
             if (r.group == SensorGroup::Disk) {
-                // Complete the drives the native query could not read (SATA needs SMART/admin).
+                // Complete the drives the native query could not read (SATA needs SMART/admin). One reading per
+                // drive, in order: two drives of the same model each get their own temperature.
                 bool matched = false;
-                for (DiskSnapshot& disk : out.disks) {
-                    if (SameDrive(disk.model, r.name)) {
-                        if (!disk.temperature) disk.temperature = r.value;
-                        matched = true;
-                    }
+                for (size_t i = 0; i < out.disks.size() && !matched; ++i) {
+                    if (consumed[i] || !SameDrive(out.disks[i].model, r.name)) continue;
+                    consumed[i] = true;
+                    matched = true;
+                    if (!out.disks[i].temperature) out.disks[i].temperature = r.value;
                 }
                 if (!matched) extraDrives.push_back(std::move(r));
             }

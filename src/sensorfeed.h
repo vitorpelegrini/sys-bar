@@ -49,12 +49,14 @@ public:
 
 private:
     void Open();
+    void OpenWanted();
 
     HANDLE mapping_ = nullptr;
     const uint8_t* view_ = nullptr;
     HANDLE wanted_ = nullptr;
     HANDLE update_ = nullptr;
     ULONGLONG nextOpen_ = 0;
+    ULONGLONG lastGood_ = 0;
 };
 
 constexpr uint32_t EncodeVersion(uint32_t major, uint32_t minor, uint32_t patch) {
