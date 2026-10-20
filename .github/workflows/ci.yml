@@ -55,13 +55,13 @@ jobs:
         run: build\Release\sysbar-tests.exe --previews build\previews
       - name: Upload previews
         if: matrix.tests == 'ON'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: previews
           path: build/previews
           retention-days: 7
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sys-bar-${{ matrix.arch }}
           path: build/Release/sys-bar.exe
