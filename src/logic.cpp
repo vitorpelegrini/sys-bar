@@ -1,5 +1,6 @@
 #include "logic.h"
 
+#include "format.h"
 #include "settings.h"
 
 #include <algorithm>
@@ -115,6 +116,19 @@ bool CanHide(const Settings& s, MetricId id, const Availability& a) {
     // Hiding is allowed only if something that is actually available stays enabled.
     return copy.showCpu || copy.showRam || (copy.showGpu && a.gpu) || (copy.showVram && a.gpu && a.vram) ||
            (copy.showDisk && a.disk);
+}
+
+bool SeparateDisks(const Settings& s, size_t diskCount) {
+    return s.disksSeparate && diskCount >= 2 && diskCount <= kMaxDiskColumns;
+}
+
+std::wstring DiskStripLabel(hw::DiskKind kind, const std::wstring& letters, int number, const wchar_t* fallback) {
+    const wchar_t* name = hw::DiskKindName(kind);
+    std::wstring label = *name ? name : (fallback ? fallback : L"");
+    const std::wstring letter = text::FirstDriveLetter(letters);
+    label += L' ';
+    label += letter.empty() ? std::to_wstring(number) : letter;
+    return label;
 }
 
 int TemperatureLevel(MetricId id, double celsius) {

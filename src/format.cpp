@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cwctype>
 #include <regex>
 
 namespace text {
@@ -93,6 +94,31 @@ std::wstring IntervalLabel(unsigned intervalMs, wchar_t decimal, std::wstring_vi
         }
     }
     return Format(secondsPattern, {number});
+}
+
+std::wstring Degrees(double celsius, bool fahrenheit) {
+    if (!std::isfinite(celsius)) celsius = 0.0;
+    const double value = fahrenheit ? celsius * 9.0 / 5.0 + 32.0 : celsius;
+    return std::to_wstring(static_cast<long>(std::lround(value)));
+}
+
+std::wstring TemperatureBadge(double celsius, bool fahrenheit) {
+    return Degrees(celsius, fahrenheit) + (fahrenheit ? L"°F" : L"°");
+}
+
+std::wstring TemperatureText(double celsius, bool fahrenheit) {
+    return Degrees(celsius, fahrenheit) + (fahrenheit ? L" °F" : L" °C");
+}
+
+std::wstring FirstDriveLetter(std::wstring_view letters) {
+    std::wstring best;
+    for (size_t i = 0; i + 1 < letters.size(); ++i) {
+        if (letters[i + 1] != L':' || !std::iswalpha(letters[i])) continue;
+        if (i > 0 && letters[i - 1] != L' ') continue;
+        const std::wstring letter{static_cast<wchar_t>(std::towupper(letters[i])), L':'};
+        if (best.empty() || letter < best) best = letter;
+    }
+    return best;
 }
 
 }  // namespace text

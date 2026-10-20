@@ -24,12 +24,21 @@ TEST(Storage_devices_enumerate_without_admin) {
     // Every machine has at least one physical disk, and opening it for property queries needs no rights.
     hw::StorageDevices storage;
     storage.Refresh();
-    const hw::DiskDevice* first = storage.Find(0);
-    CHECK(first != nullptr);
-    if (first) {
-        storage.UpdateTemperature(0);  // must not crash or hang, whether supported or not
-        std::printf("      disk 0: %s%s, temperature %s\n", t::Narrow(first->model).c_str(),
-                    first->nvme ? " (NVMe)" : "",
-                    first->temperature ? std::to_string(static_cast<int>(*first->temperature)).c_str() : "n/a");
+    CHECK(storage.Find(0) != nullptr);
+    for (int n = 0; n < 32; ++n) {
+        const hw::DiskDevice* disk = storage.Find(n);
+        if (!disk) continue;
+        storage.UpdateTemperature(n);  // must not crash or hang, whether supported or not
+        std::printf("      disk %d: %-24s kind %-4s temperature %s\n", n, t::Narrow(disk->model).c_str(),
+                    t::Narrow(hw::DiskKindName(disk->kind)).c_str(),
+                    disk->temperature ? std::to_string(static_cast<int>(*disk->temperature)).c_str() : "n/a");
     }
+}
+
+TEST(Disk_kind_names) {
+    CHECK_EQ(std::wstring(hw::DiskKindName(hw::DiskKind::Nvme)), std::wstring(L"NVMe"));
+    CHECK_EQ(std::wstring(hw::DiskKindName(hw::DiskKind::Ssd)), std::wstring(L"SSD"));
+    CHECK_EQ(std::wstring(hw::DiskKindName(hw::DiskKind::Hdd)), std::wstring(L"HDD"));
+    CHECK_EQ(std::wstring(hw::DiskKindName(hw::DiskKind::Usb)), std::wstring(L"USB"));
+    CHECK_EQ(std::wstring(hw::DiskKindName(hw::DiskKind::Unknown)), std::wstring(L""));
 }

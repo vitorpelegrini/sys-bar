@@ -2,7 +2,9 @@
 
 #include "common.h"
 #include "gfx.h"
+#include "hardware.h"
 
+#include <string>
 #include <vector>
 
 struct Settings;
@@ -80,5 +82,15 @@ bool CanHide(const Settings& settings, MetricId id, const Availability& availabl
 // 0 = normal, 1 = warm (amber), 2 = hot (red). Processors (CPU/GPU) warm at 85 °C and are hot at
 // 95 °C; drives warm at 60 °C and are hot at 70 °C.
 int TemperatureLevel(MetricId id, double celsius);
+
+// ---- Disks ------------------------------------------------------------------------------------
+// Separate strip columns (and card rows) per physical disk, when the user wants them and there are
+// between 2 and kMaxDiskColumns drives; more than that would crowd the taskbar, so they are combined.
+constexpr size_t kMaxDiskColumns = 4;
+bool SeparateDisks(const Settings& settings, size_t diskCount);
+
+// Strip label of one disk: its kind and first drive letter ("NVMe C:", "SSD D:"). Unknown kinds use
+// `fallback` (the translated "DISK"); a disk without letters is identified by its number ("HDD 2").
+std::wstring DiskStripLabel(hw::DiskKind kind, const std::wstring& letters, int number, const wchar_t* fallback);
 
 }  // namespace logic

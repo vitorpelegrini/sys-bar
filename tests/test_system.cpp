@@ -187,6 +187,8 @@ TEST(Settings_defaults_without_a_file) {
     CHECK_EQ(s.intervalMs, 1000ul);
     CHECK_EQ(s.language, std::wstring(L"auto"));
     CHECK_EQ(s.offsetDip, 0);
+    CHECK_EQ(s.temperatureUnit, std::wstring(L"auto"));
+    CHECK(s.disksSeparate);
 }
 
 TEST(Settings_round_trip) {
@@ -201,6 +203,8 @@ TEST(Settings_round_trip) {
     a.intervalMs = 2000;
     a.language = L"zh-Hant";
     a.offsetDip = 120;
+    a.temperatureUnit = L"F";
+    a.disksSeparate = false;
     a.Save();
     Settings b;
     b.Load();
@@ -215,6 +219,24 @@ TEST(Settings_round_trip) {
     CHECK_EQ(b.intervalMs, 2000ul);
     CHECK_EQ(b.language, std::wstring(L"zh-Hant"));
     CHECK_EQ(b.offsetDip, 120);
+    CHECK_EQ(b.temperatureUnit, std::wstring(L"F"));
+    CHECK(b.Fahrenheit());
+    CHECK(!b.disksSeparate);
+}
+
+TEST(Settings_temperature_unit) {
+    TempConfigDir temp;
+    std::filesystem::create_directories(temp.dir);
+    const std::wstring file = temp.File();
+    Settings s;
+    WritePrivateProfileStringW(L"sys-bar", L"TemperatureUnit", L"c", file.c_str());
+    s.Load();
+    CHECK_EQ(s.temperatureUnit, std::wstring(L"C"));
+    CHECK(!s.Fahrenheit());
+    WritePrivateProfileStringW(L"sys-bar", L"TemperatureUnit", L"kelvin", file.c_str());
+    s.Load();
+    CHECK_EQ(s.temperatureUnit, std::wstring(L"auto"));  // unknown values fall back to the region
+    CHECK_EQ(s.Fahrenheit(), Settings::RegionUsesFahrenheit());
 }
 
 TEST(Settings_fix_absurd_values) {

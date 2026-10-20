@@ -18,6 +18,11 @@ First public release.
 - Numbers that match Task Manager: CPU `% Processor Utility`, RAM in use, busiest GPU engine
   across all physical GPUs, dedicated video memory.
 - Disk activity (Task Manager's active time) in the strip, with read/write throughput in MB/s in the card.
+  Each physical drive gets its own column and card row, labeled with its type and first letter (`NVMe C:`,
+  `SSD D:`, `HDD E:`, `USB F:`, detected without administrator rights); the menu can combine them into one
+  column. More than four drives are always combined.
+- Temperatures in Celsius or Fahrenheit: automatic from the Windows region (Fahrenheit in the U.S.), or
+  chosen in the menu.
 - Temperatures without drivers or administrator rights: GPU temperature and fan speed (WDDM 2.7+), NVMe/SSD
   temperatures; shown as badges in the strip and in a "Sensors" section of the card. Disk temperatures are
   only read while a drive is busy, so sleeping hard drives are never woken up.

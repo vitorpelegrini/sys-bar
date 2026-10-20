@@ -243,6 +243,25 @@ TEST(Cannot_hide_the_last_available_metric) {
     CHECK(CanHide(s, MetricId::Cpu, {false, false, true}));  // the disk remains
 }
 
+TEST(Disks_get_their_own_columns_only_when_it_makes_sense) {
+    Settings s;
+    CHECK(!logic::SeparateDisks(s, 0));
+    CHECK(!logic::SeparateDisks(s, 1));  // a single drive: the combined column says it all
+    CHECK(logic::SeparateDisks(s, 2));
+    CHECK(logic::SeparateDisks(s, logic::kMaxDiskColumns));
+    CHECK(!logic::SeparateDisks(s, logic::kMaxDiskColumns + 1));  // too many: combined
+    s.disksSeparate = false;
+    CHECK(!logic::SeparateDisks(s, 2));
+}
+
+TEST(Disk_strip_labels) {
+    using hw::DiskKind;
+    CHECK_EQ(logic::DiskStripLabel(DiskKind::Nvme, L"E: C:", 0, L"DISK"), std::wstring(L"NVMe C:"));
+    CHECK_EQ(logic::DiskStripLabel(DiskKind::Ssd, L"D:", 1, L"DISK"), std::wstring(L"SSD D:"));
+    CHECK_EQ(logic::DiskStripLabel(DiskKind::Hdd, L"", 2, L"DISK"), std::wstring(L"HDD 2"));
+    CHECK_EQ(logic::DiskStripLabel(DiskKind::Unknown, L"F:", 3, L"DISCO"), std::wstring(L"DISCO F:"));
+}
+
 TEST(Temperature_levels) {
     CHECK_EQ(TemperatureLevel(MetricId::Cpu, 60.0), 0);
     CHECK_EQ(TemperatureLevel(MetricId::Cpu, 85.0), 1);

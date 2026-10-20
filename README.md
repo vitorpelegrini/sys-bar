@@ -30,8 +30,10 @@
   buttons move aside to make room, so nothing is ever covered.
 - **The same numbers as Task Manager.** CPU uses `% Processor Utility`. RAM is total minus
   available. GPU is the busiest engine of any GPU. VRAM is dedicated video memory.
-- **Disk and temperatures.** Disk activity with read/write MB/s. Temperatures appear as small badges in the strip,
-  and the card has a sensors section.
+- **Disk and temperatures.** Disk activity with read/write MB/s. Each drive gets its own column, labeled with
+  its type and letter (`NVMe C:`, `SSD D:`, `HDD E:`); the menu can combine them into one. Temperatures appear
+  as small badges in the strip, and the card has a sensors section. Celsius or Fahrenheit: automatic from the
+  Windows region, or chosen in the menu.
   - GPU temperature and fan, and NVMe temperatures, need no driver.
   - The optional **advanced sensors** add CPU temperature, motherboard and controller fans, and SATA drive
     temperatures (see below).

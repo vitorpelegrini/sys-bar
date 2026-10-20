@@ -66,6 +66,10 @@ void Settings::Load() {
     showVram = ReadBool(file, L"ShowVram", showVram);
     showDisk = ReadBool(file, L"ShowDisk", showDisk);
     showTemperatures = ReadBool(file, L"ShowTemperatures", showTemperatures);
+    disksSeparate = ReadBool(file, L"DisksSeparate", disksSeparate);
+    wchar_t unit[8] = {};
+    GetPrivateProfileStringW(kSection, L"TemperatureUnit", temperatureUnit.c_str(), unit, 8, file.c_str());
+    temperatureUnit = _wcsicmp(unit, L"C") == 0 ? L"C" : _wcsicmp(unit, L"F") == 0 ? L"F" : L"auto";
     colorByLoad = ReadBool(file, L"ColorByLoad", colorByLoad);
     clickOpensTaskManager = ReadBool(file, L"ClickOpensTaskManager", clickOpensTaskManager);
     intervalMs = std::clamp<DWORD>(GetPrivateProfileIntW(kSection, L"IntervalMs", intervalMs, file.c_str()),
@@ -92,6 +96,8 @@ void Settings::Save() const {
     WriteValue(file, L"ShowVram", std::to_wstring(showVram));
     WriteValue(file, L"ShowDisk", std::to_wstring(showDisk));
     WriteValue(file, L"ShowTemperatures", std::to_wstring(showTemperatures));
+    WriteValue(file, L"TemperatureUnit", temperatureUnit);
+    WriteValue(file, L"DisksSeparate", std::to_wstring(disksSeparate));
     WriteValue(file, L"ColorByLoad", std::to_wstring(colorByLoad));
     WriteValue(file, L"ClickOpensTaskManager", std::to_wstring(clickOpensTaskManager));
     WriteValue(file, L"IntervalMs", std::to_wstring(intervalMs));
@@ -100,6 +106,22 @@ void Settings::Save() const {
     WriteValue(file, L"CheckUpdates", std::to_wstring(checkUpdates));
     WriteValue(file, L"AutoUpdate", std::to_wstring(autoUpdate));
     WriteValue(file, L"LastUpdateCheck", std::to_wstring(lastUpdateCheck));
+}
+
+bool Settings::Fahrenheit() const {
+    if (temperatureUnit == L"F") return true;
+    if (temperatureUnit == L"C") return false;
+    return RegionUsesFahrenheit();
+}
+
+bool Settings::RegionUsesFahrenheit() {
+    // The region's measurement system: 0 = metric, 1 = U.S. (the regions that use Fahrenheit).
+    DWORD system = 0;
+    if (!GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_IMEASURE | LOCALE_RETURN_NUMBER,
+                         reinterpret_cast<LPWSTR>(&system), sizeof(system) / sizeof(wchar_t))) {
+        return false;
+    }
+    return system == 1;
 }
 
 bool Settings::IsAutostartEnabled() {

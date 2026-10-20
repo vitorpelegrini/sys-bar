@@ -68,6 +68,11 @@ enum Command : UINT {
     kCmdAutoUpdate,
     kCmdInstallUpdate,
     kCmdAdvancedSensors,
+    kCmdDisksEach,
+    kCmdDisksCombined,
+    kCmdTemperatureAuto,
+    kCmdTemperatureC,
+    kCmdTemperatureF,
     kCmdInterval0 = 200,  // + index into kIntervals
     kCmdLanguageAuto = 300,
     kCmdLanguage0 = 301,  // + i18n::Lang
@@ -461,7 +466,8 @@ void App::RebuildItems() {
     const auto& s = snapshot_;
     const std::wstring gb = S(i18n::Str::UnitGB);
 
-    auto percent = [&](MetricId id, const wchar_t* label, double value) {
+    const bool fahrenheit = settings_.Fahrenheit();
+    auto percent = [&](MetricId id, int key, const std::wstring& label, double value) {
         ItemView item;
         item.id = id;
         item.label = label;
@@ -470,7 +476,7 @@ void App::RebuildItems() {
         item.worstStrong = L"100";
         item.worstWeak = L"%";
         item.load = static_cast<float>(value / 100.0);
-        item.fraction = shown_[static_cast<int>(id)];
+        item.fraction = tracks_[key].shown;
         items_.push_back(std::move(item));
     };
     auto memory = [&](MetricId id, const wchar_t* label, uint64_t used, uint64_t total) {
@@ -483,44 +489,54 @@ void App::RebuildItems() {
         item.worstStrong = totalText;
         item.worstWeak = L" / " + totalText + L" " + gb;
         item.load = text::Ratio(used, total);
-        item.fraction = shown_[static_cast<int>(id)];
+        item.fraction = tracks_[Key(id)].shown;
         items_.push_back(std::move(item));
     };
 
     // Temperature badge on the label line ("54°"), colored when warm/hot.
-    auto badge = [&](MetricId id, const std::optional<double>& celsius) {
+    auto badge = [&](MetricId id, int key, const std::optional<double>& celsius) {
         if (!settings_.showTemperatures || items_.empty()) return;
         // Once a metric has shown a temperature, its column keeps the room for it: the strip must not
         // grow and shrink whenever a reading is momentarily missing (e.g. an idle drive).
-        bool& seen = badgeSeen_[static_cast<int>(id)];
+        bool& seen = tracks_[key].badgeSeen;
         seen = seen || celsius.has_value();
         if (!seen) return;
         ItemView& item = items_.back();
-        item.worstBadge = L"100°";
+        item.worstBadge = text::TemperatureBadge(100.0, fahrenheit);  // "100°" / "212°F"
         if (!celsius) return;
-        item.badge = std::to_wstring(static_cast<int>(std::lround(*celsius))) + L"°";
+        item.badge = text::TemperatureBadge(*celsius, fahrenheit);
         item.badgeLevel = settings_.colorByLoad ? logic::TemperatureLevel(id, *celsius) : 0;
     };
 
     for (MetricId id : logic::VisibleMetrics(settings_, Available())) {
         switch (id) {
             case MetricId::Cpu:
-                percent(id, L"CPU", s.cpu);
-                badge(id, s.cpuTemperature);
+                percent(id, Key(id), L"CPU", s.cpu);
+                badge(id, Key(id), s.cpuTemperature);
                 break;
             case MetricId::Ram: memory(id, L"RAM", s.ramUsed, s.ramTotal); break;
             case MetricId::Gpu:
-                percent(id, L"GPU", s.gpu);
-                badge(id, s.gpuTemperature);
+                percent(id, Key(id), L"GPU", s.gpu);
+                badge(id, Key(id), s.gpuTemperature);
                 break;
             case MetricId::Vram: memory(id, L"VRAM", s.vramUsed, s.vramTotal); break;
             case MetricId::Disk: {
-                percent(id, S(i18n::Str::StripDisk), s.diskActive);
+                if (logic::SeparateDisks(settings_, s.disks.size())) {
+                    for (const DiskSnapshot& disk : s.disks) {
+                        const int key = kDiskKeyBase + disk.number;
+                        percent(id, key,
+                                logic::DiskStripLabel(disk.kind, disk.letters, disk.number, S(i18n::Str::StripDisk)),
+                                disk.active);
+                        badge(id, key, disk.temperature);
+                    }
+                    break;
+                }
+                percent(id, Key(id), S(i18n::Str::StripDisk), s.diskActive);
                 std::optional<double> hottest;
                 for (const DiskSnapshot& disk : s.disks) {
                     if (disk.temperature && (!hottest || *disk.temperature > *hottest)) hottest = disk.temperature;
                 }
-                badge(id, hottest);
+                badge(id, Key(id), hottest);
                 break;
             }
         }
@@ -569,21 +585,35 @@ void App::OnSample() {
     if (!snapshot_.valid || quitting_) return;
     if (cpuDisplayName_.empty()) cpuDisplayName_ = text::CleanCpuName(sampler_.Info().cpuName);
 
-    target_[static_cast<int>(MetricId::Cpu)] = static_cast<float>(snapshot_.cpu / 100.0);
-    target_[static_cast<int>(MetricId::Ram)] = text::Ratio(snapshot_.ramUsed, snapshot_.ramTotal);
-    target_[static_cast<int>(MetricId::Gpu)] = static_cast<float>(snapshot_.gpu / 100.0);
-    target_[static_cast<int>(MetricId::Vram)] = text::Ratio(snapshot_.vramUsed, snapshot_.vramTotal);
-    target_[static_cast<int>(MetricId::Disk)] = static_cast<float>(snapshot_.diskActive / 100.0);
+    // Disks are listed in physical order, so their columns never swap places.
+    std::sort(snapshot_.disks.begin(), snapshot_.disks.end(),
+              [](const DiskSnapshot& a, const DiskSnapshot& b) { return a.number < b.number; });
 
-    for (int i = 0; i < kMetricCount; ++i) {
-        history_[i].push_back(target_[i]);
-        while (history_[i].size() > kHistory) history_[i].pop_front();
+    std::map<int, float> samples{
+        {Key(MetricId::Cpu), static_cast<float>(snapshot_.cpu / 100.0)},
+        {Key(MetricId::Ram), text::Ratio(snapshot_.ramUsed, snapshot_.ramTotal)},
+        {Key(MetricId::Gpu), static_cast<float>(snapshot_.gpu / 100.0)},
+        {Key(MetricId::Vram), text::Ratio(snapshot_.vramUsed, snapshot_.vramTotal)},
+        {Key(MetricId::Disk), static_cast<float>(snapshot_.diskActive / 100.0)},
+    };
+    for (const DiskSnapshot& disk : snapshot_.disks) {
+        samples[kDiskKeyBase + disk.number] = static_cast<float>(disk.active / 100.0);
+    }
+    // Forget disks that went away (an unplugged USB drive): their column and history go with them.
+    for (auto it = tracks_.begin(); it != tracks_.end();) {
+        it = samples.count(it->first) ? std::next(it) : tracks_.erase(it);
     }
 
     float largest = 0.0f;
-    for (int i = 0; i < kMetricCount; ++i) largest = std::max(largest, std::fabs(target_[i] - shown_[i]));
+    for (const auto& [key, value] : samples) {
+        Track& track = tracks_[key];
+        track.target = value;
+        track.history.push_back(value);
+        while (track.history.size() > kHistory) track.history.pop_front();
+        largest = std::max(largest, std::fabs(track.target - track.shown));
+    }
     if (!AnimationsAllowed() || largest < kAnimationMinDelta) {
-        shown_ = target_;
+        for (auto& [key, track] : tracks_) track.shown = track.target;
         if (animating_) KillTimer(controller_, kAnimationTimer), animating_ = false;
     } else if (!animating_) {
         animating_ = true;
@@ -598,12 +628,12 @@ void App::OnSample() {
 
 void App::OnAnimationTick() {
     bool moving = false;
-    for (int i = 0; i < kMetricCount; ++i) {
-        const float delta = target_[i] - shown_[i];
+    for (auto& [key, track] : tracks_) {
+        const float delta = track.target - track.shown;
         if (std::fabs(delta) < kAnimationSnap) {
-            shown_[i] = target_[i];
+            track.shown = track.target;
         } else {
-            shown_[i] += delta * kAnimationEase;
+            track.shown += delta * kAnimationEase;
             moving = true;
         }
     }
@@ -655,7 +685,7 @@ void App::SetPaused(bool paused) {
     if (paused) {
         KillTimer(controller_, kAnimationTimer);
         animating_ = false;
-        shown_ = target_;
+        for (auto& [key, track] : tracks_) track.shown = track.target;
         HideCard();
     } else {
         RequestReposition();
@@ -681,27 +711,28 @@ CardModel App::BuildCardModel() const {
     model.hintRight = S(i18n::Str::CardHintMenu);
     model.capacity = static_cast<int>(kHistory);
 
-    auto row = [&](MetricId id, const wchar_t* title) {
+    auto row = [&](MetricId id, int key, const std::wstring& title) {
         CardRow r;
         r.id = id;
         r.title = title;
-        const auto& h = history_[static_cast<int>(id)];
-        r.history.assign(h.begin(), h.end());
-        r.load = h.empty() ? 0.0f : h.back();
+        if (const auto track = tracks_.find(key); track != tracks_.end()) {
+            r.history.assign(track->second.history.begin(), track->second.history.end());
+        }
+        r.load = r.history.empty() ? 0.0f : r.history.back();
         return r;
     };
     auto peakOf = [](const CardRow& r) {
         return r.history.empty() ? 0.0f : *std::max_element(r.history.begin(), r.history.end());
     };
-    auto percentRow = [&](MetricId id, const wchar_t* title, double value, std::wstring subtitle) {
-        CardRow r = row(id, title);
+    auto percentRow = [&](MetricId id, int key, const std::wstring& title, double value, std::wstring subtitle) {
+        CardRow r = row(id, key, title);
         r.value = percentText(value);
         r.subtitle = std::move(subtitle);
         r.peak = text::Format(S(i18n::Str::CardPeak), {percentText(peakOf(r) * 100.0)});
         model.rows.push_back(std::move(r));
     };
     auto memoryRow = [&](MetricId id, const wchar_t* title, uint64_t used, uint64_t total) {
-        CardRow r = row(id, title);
+        CardRow r = row(id, Key(id), title);
         r.value = gbText(text::GiB(used));
         r.subtitle = text::Format(S(i18n::Str::CardOfTotal),
                                   {gbText(text::GiB(total)), percentText(text::Ratio(used, total) * 100.0)});
@@ -709,11 +740,11 @@ CardModel App::BuildCardModel() const {
         model.rows.push_back(std::move(r));
     };
 
-    percentRow(MetricId::Cpu, S(i18n::Str::CardCpu), s.cpu,
+    percentRow(MetricId::Cpu, Key(MetricId::Cpu), S(i18n::Str::CardCpu), s.cpu,
                cpuDisplayName_ + L" · " + text::Format(S(i18n::Str::CardThreads), {std::to_wstring(info.logicalCpus)}));
     memoryRow(MetricId::Ram, S(i18n::Str::CardMemory), s.ramUsed, s.ramTotal);
     if (s.gpuAvailable) {
-        percentRow(MetricId::Gpu, S(i18n::Str::CardGpu), s.gpu, info.gpuName);
+        percentRow(MetricId::Gpu, Key(MetricId::Gpu), S(i18n::Str::CardGpu), s.gpu, info.gpuName);
         if (s.vramTotal > 0) memoryRow(MetricId::Vram, S(i18n::Str::CardGpuMemory), s.vramUsed, s.vramTotal);
     }
     if (s.diskAvailable) {
@@ -721,8 +752,23 @@ CardModel App::BuildCardModel() const {
             return text::Fixed1(static_cast<double>(bytesPerSecond) / (1024.0 * 1024.0), decimal_) + L" " +
                    S(i18n::Str::UnitMBps);
         };
-        percentRow(MetricId::Disk, S(i18n::Str::CardDisk), s.diskActive,
-                   text::Format(S(i18n::Str::CardDiskIo), {rate(s.diskReadBps), rate(s.diskWriteBps)}));
+        auto io = [&](uint64_t read, uint64_t write) {
+            return text::Format(S(i18n::Str::CardDiskIo), {rate(read), rate(write)});
+        };
+        if (logic::SeparateDisks(settings_, s.disks.size())) {
+            // One row per drive: "NVMe (C: E:)", its model and its own read/write rates.
+            for (const DiskSnapshot& disk : s.disks) {
+                const wchar_t* kind = hw::DiskKindName(disk.kind);
+                std::wstring title = *kind ? kind : S(i18n::Str::CardDisk);
+                if (!disk.letters.empty()) title += L" (" + disk.letters + L")";
+                std::wstring subtitle = io(disk.readBps, disk.writeBps);
+                if (!disk.model.empty()) subtitle = disk.model + L" · " + subtitle;
+                percentRow(MetricId::Disk, kDiskKeyBase + disk.number, title, disk.active, std::move(subtitle));
+            }
+        } else {
+            percentRow(MetricId::Disk, Key(MetricId::Disk), S(i18n::Str::CardDisk), s.diskActive,
+                       io(s.diskReadBps, s.diskWriteBps));
+        }
     }
 
     // Sensors: one line per device, temperature and fan together ("54 °C · 576 RPM").
@@ -738,7 +784,7 @@ CardModel App::BuildCardModel() const {
         }
         std::wstring value;
         if (reading.kind == SensorKind::Temperature) {
-            value = std::to_wstring(static_cast<int>(std::lround(reading.value))) + L" °C";
+            value = text::TemperatureText(reading.value, settings_.Fahrenheit());
             if (settings_.colorByLoad)
                 line->level = std::max(line->level, logic::TemperatureLevel(group, reading.value));
         } else {
@@ -967,11 +1013,12 @@ void App::ShowMenu(POINT screen) {
     HMENU intervals = CreatePopupMenu();
     HMENU languages = CreatePopupMenu();
     HMENU updates = CreatePopupMenu();
-    if (!menu || !intervals || !languages) {
-        if (menu) DestroyMenu(menu);
-        if (intervals) DestroyMenu(intervals);
-        if (languages) DestroyMenu(languages);
-        if (updates) DestroyMenu(updates);
+    HMENU units = CreatePopupMenu();
+    HMENU disks = CreatePopupMenu();
+    if (!menu || !intervals || !languages || !updates || !units || !disks) {
+        for (HMENU m : {menu, intervals, languages, updates, units, disks}) {
+            if (m) DestroyMenu(m);
+        }
         return;
     }
 
@@ -989,6 +1036,26 @@ void App::ShowMenu(POINT screen) {
     toggle(kCmdShowDisk, settings_.showDisk, MetricId::Disk, available.disk, i18n::Str::MenuDisk);
     AppendMenuW(menu, check(settings_.showTemperatures), kCmdShowTemperatures, S(i18n::Str::MenuTemperatures));
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+
+    // Disks: one column per drive or a single combined one (only meaningful with several drives).
+    AppendMenuW(disks, MF_STRING, kCmdDisksEach, S(i18n::Str::MenuDisksEach));
+    AppendMenuW(disks, MF_STRING, kCmdDisksCombined, S(i18n::Str::MenuDisksCombined));
+    CheckMenuRadioItem(disks, kCmdDisksEach, kCmdDisksCombined,
+                       settings_.disksSeparate ? kCmdDisksEach : kCmdDisksCombined, MF_BYCOMMAND);
+    const bool severalDisks = snapshot_.disks.size() > 1;
+    AppendMenuW(menu, MF_POPUP | (severalDisks && settings_.showDisk ? 0u : static_cast<UINT>(MF_GRAYED)),
+                reinterpret_cast<UINT_PTR>(disks), S(i18n::Str::MenuDisks));
+
+    // Temperature unit: automatic follows the Windows region (Fahrenheit in the U.S.).
+    AppendMenuW(units, MF_STRING, kCmdTemperatureAuto, S(i18n::Str::MenuTemperatureAuto));
+    AppendMenuW(units, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(units, MF_STRING, kCmdTemperatureC, L"Celsius (°C)");
+    AppendMenuW(units, MF_STRING, kCmdTemperatureF, L"Fahrenheit (°F)");
+    const UINT unit = settings_.temperatureUnit == L"C"   ? kCmdTemperatureC
+                      : settings_.temperatureUnit == L"F" ? kCmdTemperatureF
+                                                          : kCmdTemperatureAuto;
+    CheckMenuRadioItem(units, kCmdTemperatureAuto, kCmdTemperatureF, unit, MF_BYCOMMAND);
+    AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(units), S(i18n::Str::MenuTemperatureUnit));
 
     bool presetSelected = false;
     for (int i = 0; i < kIntervalCount; ++i) {
@@ -1018,7 +1085,7 @@ void App::ShowMenu(POINT screen) {
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(languages), S(i18n::Str::MenuLanguage));
 
     // Updates: status line, check now, automatic install and, when available, install/download.
-    if (updates) {
+    {
         AppendMenuW(updates, MF_STRING | MF_GRAYED, 0, UpdateStatusText().c_str());
         AppendMenuW(updates, MF_SEPARATOR, 0, nullptr);
         if (const auto release = updater_.latest(); release && updater_.state() == update::State::Available) {
@@ -1105,6 +1172,22 @@ void App::Execute(UINT command) {
         case kCmdExit: Quit(); break;
         case kCmdIntervalCustom: break;
         case kCmdAdvancedSensors: RunSensorsTool(!snapshot_.advancedSensors); break;
+        case kCmdDisksEach:
+        case kCmdDisksCombined:
+            settings_.disksSeparate = command == kCmdDisksEach;
+            settings_.Save();
+            Reposition();
+            break;
+        case kCmdTemperatureAuto:
+        case kCmdTemperatureC:
+        case kCmdTemperatureF:
+            settings_.temperatureUnit = command == kCmdTemperatureC   ? L"C"
+                                        : command == kCmdTemperatureF ? L"F"
+                                                                      : L"auto";
+            settings_.Save();
+            Reposition();
+            if (cardVisible_) UpdateCard(false);
+            break;
         case kCmdCheckUpdates:
             manualUpdateCheck_ = true;
             updater_.Check();
@@ -1133,7 +1216,7 @@ void App::Execute(UINT command) {
                 settings_.intervalMs = kIntervals[command - kCmdInterval0];
                 settings_.Save();
                 sampler_.SetInterval(settings_.intervalMs);
-                for (auto& h : history_) h.clear();  // the graph's time scale changed: start over
+                for (auto& [key, track] : tracks_) track.history.clear();  // new time scale: start over
             } else if (command >= kCmdLanguage0 && command < kCmdLanguage0 + i18n::kLanguageCount) {
                 settings_.language = i18n::Code(static_cast<i18n::Lang>(command - kCmdLanguage0));
                 settings_.Save();

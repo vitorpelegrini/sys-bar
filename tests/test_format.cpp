@@ -87,6 +87,25 @@ TEST(IntervalLabel_formats_seconds) {
     CHECK_EQ(IntervalLabel(5000, L',', L"{0}초"), std::wstring(L"5초"));
 }
 
+TEST(Temperatures_in_both_units) {
+    CHECK_EQ(Degrees(54.4, false), std::wstring(L"54"));
+    CHECK_EQ(Degrees(54.4, true), std::wstring(L"130"));  // 129.92
+    CHECK_EQ(Degrees(-40.0, true), std::wstring(L"-40"));
+    CHECK_EQ(Degrees(100.0, true), std::wstring(L"212"));
+    CHECK_EQ(TemperatureBadge(54.0, false), std::wstring(L"54\u00b0"));
+    CHECK_EQ(TemperatureBadge(54.0, true), std::wstring(L"129\u00b0F"));
+    CHECK_EQ(TemperatureText(40.0, false), std::wstring(L"40 \u00b0C"));
+    CHECK_EQ(TemperatureText(40.0, true), std::wstring(L"104 \u00b0F"));
+}
+
+TEST(First_drive_letter) {
+    CHECK_EQ(FirstDriveLetter(L"C: E:"), std::wstring(L"C:"));
+    CHECK_EQ(FirstDriveLetter(L"F: D:"), std::wstring(L"D:"));
+    CHECK_EQ(FirstDriveLetter(L"d:"), std::wstring(L"D:"));
+    CHECK_EQ(FirstDriveLetter(L""), std::wstring(L""));
+    CHECK_EQ(FirstDriveLetter(L"x"), std::wstring(L""));
+}
+
 TEST(Trim) {
     CHECK_EQ(Trim(L"  a b \t\r\n"), std::wstring(L"a b"));
     CHECK_EQ(Trim(L""), std::wstring(L""));

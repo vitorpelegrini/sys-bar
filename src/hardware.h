@@ -37,10 +37,14 @@ private:
 };
 
 // ---- Physical disks ---------------------------------------------------------------------------
+enum class DiskKind { Unknown, Nvme, Ssd, Hdd, Usb };
+
+// Short, universal name of the kind ("NVMe", "SSD", "HDD", "USB"); empty when unknown.
+const wchar_t* DiskKindName(DiskKind kind);
 struct DiskDevice {
     int number = -1;     // \\.\PhysicalDriveN
     std::wstring model;  // "Samsung SSD 980 PRO 1TB"
-    bool nvme = false;
+    DiskKind kind = DiskKind::Unknown;
     bool temperatureSupported = true;
     std::optional<double> temperature;  // °C, last value read
 };

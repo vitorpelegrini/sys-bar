@@ -385,3 +385,25 @@ TEST(Layout_makes_room_when_a_badge_appears_later) {
     float excess = 0;
     CHECK_EQ(r.FirstOverflow({disk}, &excess), -1);
 }
+TEST(Layout_per_disk_columns_and_fahrenheit_badges_fit) {
+    // One column per drive ("NVMe C:", "SSD D:") with Fahrenheit badges, the widest strip we produce.
+    auto fahrenheit = [](ItemView item, double celsius) {
+        item.badge = text::TemperatureBadge(celsius, true);
+        item.worstBadge = text::TemperatureBadge(100.0, true);
+        return item;
+    };
+    std::vector<ItemView> items = {
+        fahrenheit(Percent(MetricId::Cpu, L"CPU", 100), 99.6),
+        Memory(MetricId::Ram, L"RAM", 31'000'000'000ull, kRamTotal),
+        fahrenheit(Percent(MetricId::Disk, L"NVMe C:", 100), 99.0),
+        fahrenheit(Percent(MetricId::Disk, L"SSD D:", 100), 99.0),
+    };
+    for (UINT dpi : {96u, 144u}) {
+        Renderer r(SharedGfx());
+        r.Layout({dpi, false, static_cast<int>(40 * dpi / 96)}, items);
+        float excess = 0;
+        CHECK_EQ(r.FirstOverflow(items, &excess), -1);
+        CHECK(r.Paint(items, false));
+        SavePreview(r.surface(), L"bar-disks-fahrenheit-" + std::to_wstring(dpi * 100 / 96), 0x101010);
+    }
+}

@@ -75,6 +75,11 @@ enum class Str {
     MenuAdvancedSensors,
     MenuAdvancedSensorsActive,
     CardSensorsHint,
+    MenuTemperatureUnit,
+    MenuTemperatureAuto,
+    MenuDisks,
+    MenuDisksEach,
+    MenuDisksCombined,
     Count,
 };
 

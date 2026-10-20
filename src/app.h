@@ -12,6 +12,7 @@
 
 #include <array>
 #include <deque>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -28,6 +29,17 @@ private:
     static constexpr size_t kHistory = 60;
 
     enum class TaskbarKind { Classic, Modern };
+
+    // Animated bar, history graph and badge memory of one strip column or card row. Keyed by the
+    // metric (MetricId) or, for the per-disk columns, by kDiskKeyBase + the physical disk number.
+    struct Track {
+        float shown = 0.0f;   // drawn value (animated)
+        float target = 0.0f;  // latest sample
+        std::deque<float> history;
+        bool badgeSeen = false;  // has shown a temperature at least once
+    };
+    static constexpr int kDiskKeyBase = 100;
+    static int Key(MetricId id) { return static_cast<int>(id); }
 
     static LRESULT CALLBACK ControllerProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
     static LRESULT CALLBACK BarProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
@@ -136,10 +148,7 @@ private:
     i18n::Lang lang_ = i18n::Lang::English;
     bool light_ = false;
     bool highContrast_ = false;
-    std::array<float, kMetricCount> shown_{};
-    std::array<float, kMetricCount> target_{};
-    std::array<std::deque<float>, kMetricCount> history_;
-    std::array<bool, kMetricCount> badgeSeen_{};  // metric has shown a temperature at least once
+    std::map<int, Track> tracks_;
     std::vector<ItemView> items_;
     std::wstring cpuDisplayName_;
     std::wstring accessibleName_;

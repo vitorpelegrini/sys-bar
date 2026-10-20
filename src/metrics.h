@@ -28,7 +28,7 @@ struct DiskSnapshot {
     uint64_t readBps = 0;
     uint64_t writeBps = 0;
     std::optional<double> temperature;  // °C
-    bool nvme = false;
+    hw::DiskKind kind = hw::DiskKind::Unknown;
 };
 
 enum class SensorKind { Temperature, Fan };

@@ -17,7 +17,9 @@ struct Settings {
     bool showGpu = true;
     bool showVram = true;
     bool showDisk = true;
-    bool showTemperatures = true;  // temperature badges in the strip
+    bool showTemperatures = true;            // temperature badges in the strip
+    std::wstring temperatureUnit = L"auto";  // "auto" (from the region), "C" or "F"
+    bool disksSeparate = true;               // one strip column per physical disk (else one combined)
     bool colorByLoad = true;
     bool clickOpensTaskManager = true;
     DWORD intervalMs = 1000;
@@ -31,6 +33,10 @@ struct Settings {
 
     void Load();
     void Save() const;
+
+    // Whether temperatures are shown in Fahrenheit (explicit choice, else the Windows region).
+    bool Fahrenheit() const;
+    static bool RegionUsesFahrenheit();
 
     static std::wstring FilePath();
     static bool IsAutostartEnabled();

@@ -67,18 +67,37 @@ namespace {
 
 constexpr int kMaxPhysicalDrives = 32;
 
-std::wstring ReadModel(HANDLE file, bool& nvme) {
+// A drive "incurs a seek penalty" when it has moving heads: that is how Windows itself tells HDD from SSD.
+std::optional<bool> SeekPenalty(HANDLE file) {
+    STORAGE_PROPERTY_QUERY query{StorageDeviceSeekPenaltyProperty, PropertyStandardQuery, {0}};
+    DEVICE_SEEK_PENALTY_DESCRIPTOR descriptor{};
+    DWORD bytes = 0;
+    if (!DeviceIoControl(file, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), &descriptor, sizeof(descriptor),
+                         &bytes, nullptr) ||
+        bytes < sizeof(descriptor)) {
+        return std::nullopt;
+    }
+    return descriptor.IncursSeekPenalty != FALSE;
+}
+
+std::wstring ReadModel(HANDLE file, DiskKind& kind) {
     STORAGE_PROPERTY_QUERY query{StorageDeviceProperty, PropertyStandardQuery, {0}};
     alignas(8) BYTE buffer[1024] = {};
     DWORD bytes = 0;
-    nvme = false;
+    kind = DiskKind::Unknown;
     if (!DeviceIoControl(file, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), buffer, sizeof(buffer), &bytes,
                          nullptr) ||
         bytes < sizeof(STORAGE_DEVICE_DESCRIPTOR)) {
         return {};
     }
     const auto* descriptor = reinterpret_cast<const STORAGE_DEVICE_DESCRIPTOR*>(buffer);
-    nvme = descriptor->BusType == BusTypeNvme;
+    if (descriptor->BusType == BusTypeNvme) {
+        kind = DiskKind::Nvme;
+    } else if (descriptor->BusType == BusTypeUsb) {
+        kind = DiskKind::Usb;
+    } else if (const auto penalty = SeekPenalty(file)) {
+        kind = *penalty ? DiskKind::Hdd : DiskKind::Ssd;
+    }
     if (!descriptor->ProductIdOffset || descriptor->ProductIdOffset >= bytes) return {};
     const char* product = reinterpret_cast<const char*>(buffer) + descriptor->ProductIdOffset;
     const size_t max = bytes - descriptor->ProductIdOffset;
@@ -101,7 +120,7 @@ void StorageDevices::Refresh() {
         Handle h;
         h.file = file;
         h.device.number = n;
-        h.device.model = ReadModel(file, h.device.nvme);
+        h.device.model = ReadModel(file, h.device.kind);
         disks_.push_back(std::move(h));
     }
 }
@@ -145,6 +164,16 @@ const DiskDevice* StorageDevices::Find(int number) const {
         if (h.device.number == number) return &h.device;
     }
     return nullptr;
+}
+
+const wchar_t* DiskKindName(DiskKind kind) {
+    switch (kind) {
+        case DiskKind::Nvme: return L"NVMe";
+        case DiskKind::Ssd: return L"SSD";
+        case DiskKind::Hdd: return L"HDD";
+        case DiskKind::Usb: return L"USB";
+        default: return L"";
+    }
 }
 
 bool ParseDiskInstance(const wchar_t* name, int& number, std::wstring& letters) {

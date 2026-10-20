@@ -457,7 +457,7 @@ void MetricsSampler::CollectDisks(MetricsSnapshot& out, bool collected) {
         }
         if (const hw::DiskDevice* device = storage_.Find(disk.number)) {
             disk.model = device->model;
-            disk.nvme = device->nvme;
+            disk.kind = device->kind;
             disk.temperature = device->temperature;
         }
         out.diskActive = std::max(out.diskActive, disk.active);
@@ -536,6 +536,7 @@ void MetricsSampler::CollectSensors(MetricsSnapshot& out) {
     for (const DiskSnapshot& disk : out.disks) {
         if (!disk.temperature) continue;
         std::wstring name = disk.model.empty() ? L"Disk " + std::to_wstring(disk.number) : disk.model;
+        if (const wchar_t* kind = hw::DiskKindName(disk.kind); *kind) name = std::wstring(kind) + L" · " + name;
         if (!disk.letters.empty()) name += L" (" + disk.letters + L")";
         out.sensors.push_back({SensorKind::Temperature, SensorGroup::Disk, name, *disk.temperature});
     }

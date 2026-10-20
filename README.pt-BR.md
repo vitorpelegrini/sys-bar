@@ -31,8 +31,10 @@
 - **Os mesmos números do Gerenciador de Tarefas.** A CPU usa `% Processor Utility`. A RAM é o
   total menos o disponível. A GPU é o engine mais ocupado de qualquer GPU. A VRAM é a memória de
   vídeo dedicada.
-- **Disco e temperaturas.** Atividade de disco com leitura/gravação em MB/s. As temperaturas aparecem em
-  pequenos badges na faixa, e o card tem uma seção de sensores.
+- **Disco e temperaturas.** Atividade de disco com leitura/gravação em MB/s. Cada disco tem a sua coluna,
+  identificada pelo tipo e pela letra (`NVMe C:`, `SSD D:`, `HDD E:`); pelo menu dá para juntar todos em uma.
+  As temperaturas aparecem em pequenos badges na faixa, e o card tem uma seção de sensores. Celsius ou
+  Fahrenheit: automático pela região do Windows, ou escolhido no menu.
   - Temperatura e fan da GPU, e temperatura dos NVMe, sem precisar de driver.
   - Os **sensores avançados** opcionais acrescentam a temperatura da CPU, as fans da placa-mãe e de
     controladoras e a temperatura de discos SATA (veja abaixo).
