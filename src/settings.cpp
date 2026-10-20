@@ -65,6 +65,11 @@ void Settings::Load() {
     showGpu = ReadBool(file, L"ShowGpu", showGpu);
     showVram = ReadBool(file, L"ShowVram", showVram);
     showDisk = ReadBool(file, L"ShowDisk", showDisk);
+    showNet = ReadBool(file, L"ShowNet", showNet);
+    showBattery = ReadBool(file, L"ShowBattery", showBattery);
+    wchar_t roles[1024] = {};
+    GetPrivateProfileStringW(kSection, L"FanRoles", fanRoles.c_str(), roles, 1024, file.c_str());
+    fanRoles = roles;
     showTemperatures = ReadBool(file, L"ShowTemperatures", showTemperatures);
     disksSeparate = ReadBool(file, L"DisksSeparate", disksSeparate);
     wchar_t unit[8] = {};
@@ -95,6 +100,9 @@ void Settings::Save() const {
     WriteValue(file, L"ShowGpu", std::to_wstring(showGpu));
     WriteValue(file, L"ShowVram", std::to_wstring(showVram));
     WriteValue(file, L"ShowDisk", std::to_wstring(showDisk));
+    WriteValue(file, L"ShowNet", std::to_wstring(showNet));
+    WriteValue(file, L"ShowBattery", std::to_wstring(showBattery));
+    WriteValue(file, L"FanRoles", fanRoles);
     WriteValue(file, L"ShowTemperatures", std::to_wstring(showTemperatures));
     WriteValue(file, L"TemperatureUnit", temperatureUnit);
     WriteValue(file, L"DisksSeparate", std::to_wstring(disksSeparate));

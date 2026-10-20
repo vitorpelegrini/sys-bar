@@ -345,6 +345,8 @@ void MetricsSampler::Collect(MetricsSnapshot& out) {
     CollectGpu(out, collected);
     CollectDisks(out, collected);
     CollectSensors(out);
+    out.network = network_.Update(hw::ReadNetInterfaces(), GetTickCount64());
+    out.battery = battery_.Read();
 }
 
 void MetricsSampler::CollectGpu(MetricsSnapshot& out, bool collected) {

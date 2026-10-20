@@ -9,8 +9,10 @@ namespace SysBar.Sensors
     internal sealed class SensorReader : IDisposable
     {
         private static readonly TimeSpan StorageInterval = TimeSpan.FromSeconds(10);  // SMART queries are slow
+        private static readonly TimeSpan GpuInterval = TimeSpan.FromSeconds(3);       // only its fan, which is slow
         private readonly Computer _computer;
         private DateTime _lastStorageUpdate = DateTime.MinValue;
+        private DateTime _lastGpuUpdate = DateTime.MinValue;
 
         public SensorReader()
         {
@@ -39,10 +41,15 @@ namespace SysBar.Sensors
             DateTime now = DateTime.UtcNow;
             bool refreshStorage = now - _lastStorageUpdate >= StorageInterval;
             if (refreshStorage) _lastStorageUpdate = now;
+            bool refreshGpu = now - _lastGpuUpdate >= GpuInterval;
+            if (refreshGpu) _lastGpuUpdate = now;
             foreach (IHardware hardware in _computer.Hardware)
             {
-                // Drive temperatures change slowly and cost most of the time: refresh them less often.
-                if (hardware.HardwareType != HardwareType.Storage || refreshStorage) Update(hardware);
+                // Drive temperatures and GPU fans change slowly and cost most of the time: refresh them less often.
+                bool due = hardware.HardwareType == HardwareType.Storage ? refreshStorage
+                    : IsGpu(hardware.HardwareType) ? refreshGpu
+                    : true;
+                if (due) Update(hardware);
                 switch (hardware.HardwareType)
                 {
                     case HardwareType.Cpu:

@@ -73,10 +73,15 @@ enum Command : UINT {
     kCmdTemperatureAuto,
     kCmdTemperatureC,
     kCmdTemperatureF,
+    kCmdShowNet,
+    kCmdShowBattery,
     kCmdInterval0 = 200,  // + index into kIntervals
     kCmdLanguageAuto = 300,
     kCmdLanguage0 = 301,  // + i18n::Lang
+    kCmdFan0 = 500,       // + fan index * kFanCommandStride + FanRole (0 = automatic)
 };
+constexpr UINT kFanCommandStride = 8;
+constexpr size_t kMaxMenuFans = 24;
 
 constexpr DWORD kIntervals[] = {500, 1000, 2000, 5000};
 constexpr int kIntervalCount = static_cast<int>(std::size(kIntervals));
@@ -539,12 +544,75 @@ void App::RebuildItems() {
                 badge(id, Key(id), hottest);
                 break;
             }
+            case MetricId::Net: {
+                // Download as the value, upload on the label line; the bar is the link utilization.
+                const std::wstring widest = S(i18n::Str::UnitMBps);
+                const text::RateText down = text::Rate(s.network.downBps, decimal_);
+                const text::RateText up = text::Rate(s.network.upBps, decimal_);
+                ItemView item;
+                item.id = id;
+                item.label = S(i18n::Str::StripNet);
+                item.strong = L"\u2193 " + down.number;
+                item.weak = std::wstring(L" ") + RateUnit(down.unit);
+                item.worstStrong = L"\u2193 999";
+                item.worstWeak = L" " + widest;
+                item.badge = L"\u2191 " + up.number + L" " + RateUnit(up.unit);
+                item.worstBadge = L"\u2191 999 " + widest;
+                item.fraction = tracks_[Key(id)].shown;
+                items_.push_back(std::move(item));
+                break;
+            }
+            case MetricId::Battery: {
+                const hw::BatteryReading& b = s.battery;
+                ItemView item;
+                item.id = id;
+                item.label = S(i18n::Str::StripBattery);
+                item.strong = text::Percent(b.percent);
+                item.weak = L"%";
+                item.worstStrong = L"100";
+                item.worstWeak = L"%";
+                // Low charge on battery is what deserves attention (amber at 20%, red at 10%).
+                const bool draining = !b.acOnline;
+                item.load = draining && b.percent <= 10.0   ? kCriticalLoad
+                            : draining && b.percent <= 20.0 ? kWarnLoad
+                                                            : 0.0f;
+                item.fraction = tracks_[Key(id)].shown;
+                bool& seen = tracks_[Key(id)].badgeSeen;  // power in watts, when the driver reports it
+                seen = seen || b.watts.has_value();
+                if (seen) {
+                    item.worstBadge = L"\u221299 W";
+                    if (b.watts) item.badge = text::Watts(*b.watts, decimal_);
+                }
+                items_.push_back(std::move(item));
+                break;
+            }
         }
     }
 }
 
+const wchar_t* App::RateUnit(int unit) const {
+    return S(unit == 0 ? i18n::Str::UnitKBps : unit == 1 ? i18n::Str::UnitMBps : i18n::Str::UnitGBps);
+}
+
+std::wstring App::RateText(uint64_t bytesPerSecond) const {
+    const text::RateText rate = text::Rate(bytesPerSecond, decimal_);
+    return rate.number + L" " + RateUnit(rate.unit);
+}
+
+std::wstring App::FanRoleName(FanRole role, const std::wstring& name) const {
+    switch (role) {
+        case FanRole::Cpu: return L"CPU";
+        case FanRole::Gpu: return L"GPU";
+        case FanRole::Case: return S(i18n::Str::CardFanCase);
+        case FanRole::Pump: return S(i18n::Str::CardFanPump);
+        case FanRole::Psu: return S(i18n::Str::CardFanPsu);
+        default: return text::Format(S(i18n::Str::CardFanGeneric), {logic::FanNumber(name)});
+    }
+}
+
 logic::Availability App::Available() const {
-    return {snapshot_.gpuAvailable, snapshot_.gpuAvailable && snapshot_.vramTotal > 0, snapshot_.diskAvailable};
+    return {snapshot_.gpuAvailable, snapshot_.gpuAvailable && snapshot_.vramTotal > 0, snapshot_.diskAvailable,
+            snapshot_.network.available, snapshot_.battery.present};
 }
 
 void App::Render(bool force) {
@@ -595,7 +663,16 @@ void App::OnSample() {
         {Key(MetricId::Gpu), static_cast<float>(snapshot_.gpu / 100.0)},
         {Key(MetricId::Vram), text::Ratio(snapshot_.vramUsed, snapshot_.vramTotal)},
         {Key(MetricId::Disk), static_cast<float>(snapshot_.diskActive / 100.0)},
+        {Key(MetricId::Battery), static_cast<float>(snapshot_.battery.percent / 100.0)},
     };
+    // Network: the bar is the utilization of the link; the card graph scales itself to the traffic.
+    const uint64_t busier = std::max(snapshot_.network.downBps, snapshot_.network.upBps);
+    samples[Key(MetricId::Net)] =
+        snapshot_.network.linkBps ? std::min(1.0f, static_cast<float>(static_cast<double>(busier) * 8.0 /
+                                                                      static_cast<double>(snapshot_.network.linkBps)))
+                                  : 0.0f;
+    netHistory_.push_back(static_cast<double>(busier));
+    while (netHistory_.size() > kHistory) netHistory_.pop_front();
     for (const DiskSnapshot& disk : snapshot_.disks) {
         samples[kDiskKeyBase + disk.number] = static_cast<float>(disk.active / 100.0);
     }
@@ -747,13 +824,30 @@ CardModel App::BuildCardModel() const {
         percentRow(MetricId::Gpu, Key(MetricId::Gpu), S(i18n::Str::CardGpu), s.gpu, info.gpuName);
         if (s.vramTotal > 0) memoryRow(MetricId::Vram, S(i18n::Str::CardGpuMemory), s.vramUsed, s.vramTotal);
     }
+    const logic::Availability available = Available();
+    if (available.net) {
+        // Total traffic as the value; the graph scales to the busiest moment of the window (at least
+        // 64 KB/s, so an idle link stays flat), like Task Manager.
+        const hw::NetRates& n = s.network;
+        CardRow r = row(MetricId::Net, Key(MetricId::Net), S(i18n::Str::CardNetwork));
+        double top = 64.0 * 1024.0;
+        for (double v : netHistory_) top = std::max(top, v);
+        r.history.clear();
+        for (double v : netHistory_) r.history.push_back(static_cast<float>(v / top));
+        r.load = 0.0f;
+        r.neutral = true;
+        r.value = RateText(n.downBps + n.upBps);
+        r.subtitle = text::Format(S(i18n::Str::CardNetIo), {RateText(n.downBps), RateText(n.upBps)});
+        if (!n.names.empty()) r.subtitle += L" \u00b7 " + n.names;
+        if (n.linkBps) r.subtitle += L" \u00b7 " + text::LinkSpeed(n.linkBps, decimal_);
+        double peak = 0.0;
+        for (double v : netHistory_) peak = std::max(peak, v);
+        r.peak = text::Format(S(i18n::Str::CardPeak), {RateText(static_cast<uint64_t>(peak))});
+        model.rows.push_back(std::move(r));
+    }
     if (s.diskAvailable) {
-        auto rate = [&](uint64_t bytesPerSecond) {
-            return text::Fixed1(static_cast<double>(bytesPerSecond) / (1024.0 * 1024.0), decimal_) + L" " +
-                   S(i18n::Str::UnitMBps);
-        };
         auto io = [&](uint64_t read, uint64_t write) {
-            return text::Format(S(i18n::Str::CardDiskIo), {rate(read), rate(write)});
+            return text::Format(S(i18n::Str::CardDiskIo), {RateText(read), RateText(write)});
         };
         if (logic::SeparateDisks(settings_, s.disks.size())) {
             // One row per drive: "NVMe (C: E:)", its model and its own read/write rates.
@@ -772,8 +866,27 @@ CardModel App::BuildCardModel() const {
         }
     }
 
+    if (available.battery) {
+        const hw::BatteryReading& b = s.battery;
+        CardRow r = row(MetricId::Battery, Key(MetricId::Battery), S(i18n::Str::CardBattery));
+        r.neutral = true;
+        r.load = !b.acOnline && b.percent <= 10.0 ? kCriticalLoad : !b.acOnline && b.percent <= 20.0 ? kWarnLoad : 0.0f;
+        r.value = text::Format(S(i18n::Str::PercentFormat), {text::Percent(b.percent)});
+        r.subtitle = S(b.charging        ? i18n::Str::CardBatteryCharging
+                       : !b.acOnline     ? i18n::Str::CardBatteryOnBattery
+                       : b.percent >= 99 ? i18n::Str::CardBatteryFull
+                                         : i18n::Str::CardBatteryPlugged);
+        if (b.watts) r.subtitle += L" \u00b7 " + text::Watts(*b.watts, decimal_);
+        if (b.secondsLeft) {
+            r.subtitle +=
+                L" \u00b7 " + text::Format(S(i18n::Str::CardBatteryLeft), {text::HoursMinutes(*b.secondsLeft)});
+        }
+        model.rows.push_back(std::move(r));
+    }
+
     // Sensors: one tile per device, with the fans that cool it (see CardSensorLine).
     const bool fahrenheit = settings_.Fahrenheit();
+    auto roleOf = [&](const SensorReading& r) { return logic::EffectiveFanRole(settings_.fanRoles, r.name, r.role); };
     auto rpm = [&](double value) {
         if (value < 1.0) return std::wstring(S(i18n::Str::CardFanStopped));  // zero-RPM mode at idle
         return text::Format(S(i18n::Str::CardRpm), {std::to_wstring(static_cast<int>(std::lround(value)))});
@@ -793,7 +906,7 @@ CardModel App::BuildCardModel() const {
     std::optional<CardSensorLine> cpuTile;
     if (s.cpuTemperature) cpuTile = temperatureTile(MetricId::Cpu, L"CPU", *s.cpuTemperature);
     for (const SensorReading& r : s.sensors) {
-        if (r.kind != SensorKind::Fan || r.role != FanRole::Cpu) continue;
+        if (r.kind != SensorKind::Fan || r.group == SensorGroup::Gpu || roleOf(r) != FanRole::Cpu) continue;
         if (!cpuTile) cpuTile = CardSensorLine{L"CPU", L"", L"", -1.0f, 0, MetricId::Cpu, false};
         join(cpuTile->detail, rpm(r.value));
     }
@@ -832,18 +945,14 @@ CardModel App::BuildCardModel() const {
 
     // Remaining fans: case, pump, power supply, or an unlabeled header ("Fan 3").
     for (const SensorReading& r : s.sensors) {
-        if (r.kind != SensorKind::Fan || r.group == SensorGroup::Gpu || r.role == FanRole::Cpu) continue;
+        const FanRole role = roleOf(r);
+        if (r.kind != SensorKind::Fan || r.group == SensorGroup::Gpu || role == FanRole::Cpu) continue;
         CardSensorLine tile;
         tile.fan = true;
         tile.id = MetricId::Cpu;
         tile.value = rpm(r.value);
-        switch (r.role) {
-            case FanRole::Case: tile.title = S(i18n::Str::CardFanCase); break;
-            case FanRole::Pump: tile.title = S(i18n::Str::CardFanPump); break;
-            case FanRole::Psu: tile.title = S(i18n::Str::CardFanPsu); break;
-            default: tile.title = text::Format(S(i18n::Str::CardFanGeneric), {logic::FanNumber(r.name)}); break;
-        }
-        if (r.role != FanRole::Unknown) tile.detail = r.name;  // "Fan #1": which header it is
+        tile.title = FanRoleName(role, r.name);
+        if (role != FanRole::Unknown) tile.detail = r.name;  // "Fan #1": which header it is
         model.sensors.push_back(std::move(tile));
     }
     if (!s.advancedSensors && !SensorsTool().empty()) model.sensorsHint = S(i18n::Str::CardSensorsHint);
@@ -1090,6 +1199,10 @@ void App::ShowMenu(POINT screen) {
     toggle(kCmdShowGpu, settings_.showGpu, MetricId::Gpu, available.gpu, i18n::Str::MenuGpu);
     toggle(kCmdShowVram, settings_.showVram, MetricId::Vram, available.vram, i18n::Str::MenuVram);
     toggle(kCmdShowDisk, settings_.showDisk, MetricId::Disk, available.disk, i18n::Str::MenuDisk);
+    toggle(kCmdShowNet, settings_.showNet, MetricId::Net, available.net, i18n::Str::MenuNetwork);
+    if (available.battery) {
+        toggle(kCmdShowBattery, settings_.showBattery, MetricId::Battery, true, i18n::Str::MenuBattery);
+    }
     AppendMenuW(menu, check(settings_.showTemperatures), kCmdShowTemperatures, S(i18n::Str::MenuTemperatures));
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
 
@@ -1112,6 +1225,41 @@ void App::ShowMenu(POINT screen) {
                                                           : kCmdTemperatureAuto;
     CheckMenuRadioItem(units, kCmdTemperatureAuto, kCmdTemperatureF, unit, MF_BYCOMMAND);
     AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(units), S(i18n::Str::MenuTemperatureUnit));
+
+    // Fans: what each motherboard fan cools, when the automatic guess is wrong for this board.
+    menuFans_.clear();
+    for (const SensorReading& r : snapshot_.sensors) {
+        if (r.kind == SensorKind::Fan && r.group == SensorGroup::Board && menuFans_.size() < kMaxMenuFans) {
+            menuFans_.push_back(r.name);
+        }
+    }
+    if (!menuFans_.empty()) {
+        HMENU fans = CreatePopupMenu();
+        for (size_t i = 0; i < menuFans_.size() && fans; ++i) {
+            const SensorReading* reading = nullptr;
+            for (const SensorReading& r : snapshot_.sensors) {
+                if (r.kind == SensorKind::Fan && r.group == SensorGroup::Board && r.name == menuFans_[i]) reading = &r;
+            }
+            if (!reading) continue;
+            HMENU roles = CreatePopupMenu();
+            if (!roles) continue;
+            const UINT base = kCmdFan0 + static_cast<UINT>(i) * kFanCommandStride;
+            const FanRole chosen = logic::EffectiveFanRole(settings_.fanRoles, reading->name, FanRole::Unknown);
+            AppendMenuW(roles, MF_STRING, base,
+                        text::Format(S(i18n::Str::MenuFanAuto), {FanRoleName(reading->role, reading->name)}).c_str());
+            AppendMenuW(roles, MF_SEPARATOR, 0, nullptr);
+            for (FanRole role : {FanRole::Cpu, FanRole::Case, FanRole::Pump, FanRole::Psu}) {
+                AppendMenuW(roles, MF_STRING, base + static_cast<UINT>(role), FanRoleName(role, reading->name).c_str());
+            }
+            CheckMenuRadioItem(roles, base, base + static_cast<UINT>(FanRole::Psu), base + static_cast<UINT>(chosen),
+                               MF_BYCOMMAND);
+            const std::wstring label =
+                reading->name + L" \u00b7 " +
+                text::Format(S(i18n::Str::CardRpm), {std::to_wstring(static_cast<int>(std::lround(reading->value)))});
+            AppendMenuW(fans, MF_POPUP, reinterpret_cast<UINT_PTR>(roles), label.c_str());
+        }
+        if (fans) AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(fans), S(i18n::Str::MenuFans));
+    }
 
     bool presetSelected = false;
     for (int i = 0; i < kIntervalCount; ++i) {
@@ -1206,6 +1354,8 @@ void App::Execute(UINT command) {
         case kCmdShowGpu: toggle(settings_.showGpu, MetricId::Gpu); break;
         case kCmdShowVram: toggle(settings_.showVram, MetricId::Vram); break;
         case kCmdShowDisk: toggle(settings_.showDisk, MetricId::Disk); break;
+        case kCmdShowNet: toggle(settings_.showNet, MetricId::Net); break;
+        case kCmdShowBattery: toggle(settings_.showBattery, MetricId::Battery); break;
         case kCmdShowTemperatures:
             settings_.showTemperatures = !settings_.showTemperatures;
             settings_.Save();
@@ -1273,6 +1423,15 @@ void App::Execute(UINT command) {
                 settings_.Save();
                 sampler_.SetInterval(settings_.intervalMs);
                 for (auto& [key, track] : tracks_) track.history.clear();  // new time scale: start over
+                netHistory_.clear();
+            } else if (command >= kCmdFan0 && command < kCmdFan0 + kMaxMenuFans * kFanCommandStride) {
+                const size_t index = (command - kCmdFan0) / kFanCommandStride;
+                const auto role = static_cast<FanRole>((command - kCmdFan0) % kFanCommandStride);
+                if (index < menuFans_.size() && role <= FanRole::Psu) {
+                    settings_.fanRoles = logic::WithFanRole(settings_.fanRoles, menuFans_[index], role);
+                    settings_.Save();
+                    if (cardVisible_) UpdateCard(false);
+                }
             } else if (command >= kCmdLanguage0 && command < kCmdLanguage0 + i18n::kLanguageCount) {
                 settings_.language = i18n::Code(static_cast<i18n::Lang>(command - kCmdLanguage0));
                 settings_.Save();

@@ -46,7 +46,8 @@ add_library(sysbar_core STATIC
     src/update.cpp
 )
 target_include_directories(sysbar_core PUBLIC src)
-target_link_libraries(sysbar_core PUBLIC d2d1 dwrite dxgi gdi32 pdh shell32 ole32 advapi32 wtsapi32 winhttp bcrypt)
+target_link_libraries(sysbar_core PUBLIC d2d1 dwrite dxgi gdi32 pdh shell32 ole32 advapi32 wtsapi32 winhttp bcrypt
+                      iphlpapi setupapi)
 sysbar_options(sysbar_core)
 
 add_executable(sys-bar WIN32 src/main.cpp src/resource.rc src/app.manifest)

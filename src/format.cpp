@@ -110,6 +110,44 @@ std::wstring TemperatureText(double celsius, bool fahrenheit) {
     return Degrees(celsius, fahrenheit) + (fahrenheit ? L" °F" : L" °C");
 }
 
+RateText Rate(uint64_t bytesPerSecond, wchar_t decimal) {
+    double value = static_cast<double>(bytesPerSecond) / 1024.0;
+    int unit = 0;
+    while (value >= 999.5 && unit < 2) {
+        value /= 1024.0;
+        ++unit;
+    }
+    RateText out;
+    out.unit = unit;
+    out.number = value < 9.95 ? Fixed1(value, decimal) : std::to_wstring(static_cast<long long>(std::llround(value)));
+    return out;
+}
+
+std::wstring LinkSpeed(uint64_t bitsPerSecond, wchar_t decimal) {
+    const double mbps = static_cast<double>(bitsPerSecond) / 1e6;
+    if (mbps >= 1000.0) {
+        const double gbps = mbps / 1000.0;
+        const bool whole = std::fabs(gbps - std::round(gbps)) < 0.05;
+        return (whole ? std::to_wstring(static_cast<long long>(std::llround(gbps))) : Fixed1(gbps, decimal)) + L" Gbps";
+    }
+    return std::to_wstring(static_cast<long long>(std::llround(mbps))) + L" Mbps";
+}
+
+std::wstring HoursMinutes(int seconds) {
+    const int minutes = std::max(0, seconds) / 60;
+    if (minutes < 60) return std::to_wstring(minutes) + L" min";
+    wchar_t buffer[32];
+    swprintf(buffer, 32, L"%d h %02d min", minutes / 60, minutes % 60);
+    return buffer;
+}
+
+std::wstring Watts(double watts, wchar_t decimal) {
+    const double magnitude = std::fabs(watts);
+    const std::wstring number = magnitude < 9.95 ? Fixed1(magnitude, decimal)
+                                                 : std::to_wstring(static_cast<long long>(std::llround(magnitude)));
+    return (watts > 0.0 ? L"+" : L"\u2212") + number + L" W";
+}
+
 std::wstring FirstDriveLetter(std::wstring_view letters) {
     std::wstring best;
     for (size_t i = 0; i + 1 < letters.size(); ++i) {

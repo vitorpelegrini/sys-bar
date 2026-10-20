@@ -37,13 +37,17 @@
   - GPU temperature and fan, and NVMe temperatures, need no driver.
   - The optional **advanced sensors** add CPU temperature, motherboard and controller fans, and SATA drive
     temperatures (see below). Each fan is matched to what it cools (CPU, GPU, case, pump, power supply), and a
-    GPU fan resting in zero-RPM mode shows as stopped.
+    GPU fan resting in zero-RPM mode shows as stopped. If a board labels its fans generically, the menu lets
+    you say which is which.
+- **Network and battery.** Download and upload with the link speed (optional, from the menu). On laptops, the
+  battery charge, power draw in watts and time left; amber at 20% and red at 10% when unplugged.
 - **Updates itself.** A daily check of GitHub Releases. Updates are verified by SHA-256 and installed silently.
 - **Hover card.** Shows the hardware model, peaks and a one-minute graph per metric. History above
-  80% / 92% load turns amber / red.
+  80% / 92% load turns amber / red. It always fits the screen: drives sit side by side, and on short
+  screens it widens and shortens its graphs instead of cutting text.
 - **Light on resources.** It is a single ~500 KB native `.exe` (C++20, Win32, Direct2D) with no
   dependencies.
-  - About 0.5% of one CPU core and 12 MB of RAM.
+  - About 1% of one CPU core and under 20 MB of RAM, sampling every second.
   - Software rendering, so it never loads the GPU it measures.
   - Pauses while the screen is off.
 - **Feels native.**

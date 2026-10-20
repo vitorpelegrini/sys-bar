@@ -98,6 +98,26 @@ TEST(Temperatures_in_both_units) {
     CHECK_EQ(TemperatureText(40.0, true), std::wstring(L"104 \u00b0F"));
 }
 
+TEST(Rates_links_durations_and_watts) {
+    CHECK_EQ(Rate(0, L',').number, std::wstring(L"0,0"));
+    CHECK_EQ(Rate(0, L',').unit, 0);
+    CHECK_EQ(Rate(812 * 1024, L',').number, std::wstring(L"812"));
+    CHECK_EQ(Rate(1000 * 1024, L',').unit, 1);  // never four digits: 1000 KB/s -> 1,0 MB/s
+    CHECK_EQ(Rate(1000 * 1024, L',').number, std::wstring(L"1,0"));
+    CHECK_EQ(Rate(4'400'000, L'.').number, std::wstring(L"4.2"));
+    CHECK_EQ(Rate(4'400'000, L'.').unit, 1);
+    CHECK_EQ(Rate(1'200'000'000ull, L',').unit, 2);
+    CHECK_EQ(Rate(1'200'000'000ull, L',').number, std::wstring(L"1,1"));
+    CHECK_EQ(LinkSpeed(1'000'000'000ull, L','), std::wstring(L"1 Gbps"));
+    CHECK_EQ(LinkSpeed(2'500'000'000ull, L','), std::wstring(L"2,5 Gbps"));
+    CHECK_EQ(LinkSpeed(100'000'000ull, L','), std::wstring(L"100 Mbps"));
+    CHECK_EQ(HoursMinutes(45 * 60), std::wstring(L"45 min"));
+    CHECK_EQ(HoursMinutes(2 * 3600 + 5 * 60), std::wstring(L"2 h 05 min"));
+    CHECK_EQ(HoursMinutes(-5), std::wstring(L"0 min"));
+    CHECK_EQ(Watts(12.4, L','), std::wstring(L"+12 W"));
+    CHECK_EQ(Watts(-8.44, L','), std::wstring(L"\u22128,4 W"));
+}
+
 TEST(First_drive_letter) {
     CHECK_EQ(FirstDriveLetter(L"C: E:"), std::wstring(L"C:"));
     CHECK_EQ(FirstDriveLetter(L"F: D:"), std::wstring(L"D:"));

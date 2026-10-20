@@ -67,6 +67,9 @@ private:
     Theme CurrentTheme() const;
     void ApplyLanguage();
     const wchar_t* S(i18n::Str id) const { return i18n::Get(lang_, id); }
+    const wchar_t* RateUnit(int unit) const;               // KB/s, MB/s, GB/s
+    std::wstring RateText(uint64_t bytesPerSecond) const;  // "4,2 MB/s" in the current language
+    std::wstring FanRoleName(FanRole role, const std::wstring& name) const;
     void UpdateAccessibleName();
     void SetPaused(bool paused);
     bool AnimationsAllowed() const;
@@ -149,6 +152,8 @@ private:
     bool light_ = false;
     bool highContrast_ = false;
     std::map<int, Track> tracks_;
+    std::deque<double> netHistory_;       // bytes/s (busier direction), for the card's self-scaling graph
+    std::vector<std::wstring> menuFans_;  // fans listed in the open context menu (index -> name)
     std::vector<ItemView> items_;
     std::wstring cpuDisplayName_;
     std::wstring accessibleName_;

@@ -205,6 +205,9 @@ TEST(Settings_round_trip) {
     a.offsetDip = 120;
     a.temperatureUnit = L"F";
     a.disksSeparate = false;
+    a.showNet = true;
+    a.showBattery = false;
+    a.fanRoles = L"Fan #1=case;Fan #2=cpu";
     a.Save();
     Settings b;
     b.Load();
@@ -222,6 +225,9 @@ TEST(Settings_round_trip) {
     CHECK_EQ(b.temperatureUnit, std::wstring(L"F"));
     CHECK(b.Fahrenheit());
     CHECK(!b.disksSeparate);
+    CHECK(b.showNet);
+    CHECK(!b.showBattery);
+    CHECK_EQ(b.fanRoles, std::wstring(L"Fan #1=case;Fan #2=cpu"));
 }
 
 TEST(Settings_temperature_unit) {

@@ -17,9 +17,12 @@ struct Settings {
     bool showGpu = true;
     bool showVram = true;
     bool showDisk = true;
+    bool showNet = false;                    // download/upload (off by default: the strip stays compact)
+    bool showBattery = true;                 // only ever shown on machines with a battery
     bool showTemperatures = true;            // temperature badges in the strip
     std::wstring temperatureUnit = L"auto";  // "auto" (from the region), "C" or "F"
     bool disksSeparate = true;               // one strip column per physical disk (else one combined)
+    std::wstring fanRoles;                   // user corrections: "Fan #1=case;Fan #2=cpu"
     bool colorByLoad = true;
     bool clickOpensTaskManager = true;
     DWORD intervalMs = 1000;

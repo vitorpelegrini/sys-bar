@@ -149,6 +149,11 @@ CardModel DemoCard(i18n::Lang lang) {
     row(MetricId::Vram, S(Str::CardGpuMemory), gb(L"2,6"), text::Format(S(Str::CardOfTotal), {gb(L"12,0"), pct(L"21")}),
         gb(L"3,1"), 0.22f, 0.03f, 0.2f);
     const std::wstring mbps = S(Str::UnitMBps);
+    row(MetricId::Net, S(Str::CardNetwork), L"4,6 " + mbps,
+        text::Format(S(Str::CardNetIo), {L"4,2 " + mbps, L"412 " + std::wstring(S(Str::UnitKBps))}) +
+            L" · Ethernet · 1 Gbps",
+        L"38 " + mbps, 0.3f, 0.25f, 0.45f);
+    model.rows.back().neutral = true;
     row(MetricId::Disk, S(Str::CardDisk), pct(L"7"),
         text::Format(S(Str::CardDiskIo), {L"12,4 " + mbps, L"0,8 " + mbps}), pct(L"64"), 0.05f, 0.08f, 0.6f);
     model.sensorsTitle = S(Str::CardSensors);
@@ -355,7 +360,23 @@ TEST(Previews_bar_and_card) {
         {L"bar-dark-200", 192, false, 40, false, false}, {L"bar-small-100", 96, false, 30, false, false},
         {L"bar-win11-48", 96, false, 48, false, false},  {L"bar-vertical", 96, true, 62, false, false},
     };
-    const auto items = Sample(23, 19'540'000'000ull, 94, 2'800'000'000ull);
+    // Showcase: network, then one column per drive ("NVMe C:", "SSD D:"), as on a typical desktop.
+    auto items = Sample(23, 19'540'000'000ull, 94, 2'800'000'000ull);
+    items.pop_back();
+    items[0] = WithBadge(Percent(MetricId::Cpu, L"CPU", 23), 47);
+    ItemView net;
+    net.id = MetricId::Net;
+    net.label = L"NET";
+    net.strong = L"\u2193 4,2";
+    net.weak = L" MB/s";
+    net.worstStrong = L"\u2193 999";
+    net.worstWeak = L" MB/s";
+    net.badge = L"\u2191 412 KB/s";
+    net.worstBadge = L"\u2191 999 MB/s";
+    net.fraction = 0.04f;
+    items.push_back(net);
+    items.push_back(WithBadge(Percent(MetricId::Disk, L"NVMe C:", 12), 41));
+    items.push_back(WithBadge(Percent(MetricId::Disk, L"SSD D:", 3), 33));
     for (const auto& v : variants) {
         Renderer r(SharedGfx());
         r.SetTheme(MakeTheme(v.light));
@@ -388,6 +409,30 @@ TEST(Layout_makes_room_when_a_badge_appears_later) {
     float excess = 0;
     CHECK_EQ(r.FirstOverflow({disk}, &excess), -1);
 }
+TEST(Network_and_battery_columns_fit) {
+    ItemView net;
+    net.id = MetricId::Net;
+    net.label = L"NET";
+    net.strong = L"\u2193 999";
+    net.weak = L" MB/s";
+    net.worstStrong = net.strong;
+    net.worstWeak = net.weak;
+    net.badge = L"\u2191 999 MB/s";
+    net.worstBadge = net.badge;
+    net.fraction = 0.4f;
+    ItemView bat = Percent(MetricId::Battery, L"BAT", 100);
+    bat.badge = L"\u221299 W";
+    bat.worstBadge = bat.badge;
+    const std::vector<ItemView> items = {Percent(MetricId::Cpu, L"CPU", 23), net, bat};
+    for (UINT dpi : {96u, 144u}) {
+        Renderer r(SharedGfx());
+        r.Layout({dpi, false, static_cast<int>(40 * dpi / 96)}, items);
+        CHECK_EQ(r.FirstOverflow(items), -1);
+        CHECK(r.Paint(items, false));
+        SavePreview(r.surface(), L"bar-net-battery-" + std::to_wstring(dpi * 100 / 96), 0x101010);
+    }
+}
+
 TEST(Layout_per_disk_columns_and_fahrenheit_badges_fit) {
     // One column per drive ("NVMe C:", "SSD D:") with Fahrenheit badges, the widest strip we produce.
     auto fahrenheit = [](ItemView item, double celsius) {
@@ -434,6 +479,27 @@ TEST(Card_never_cuts_text_it_widens_then_wraps) {
     CHECK(wraps.cy > fits.cy);
     CHECK(card.Paint(model));
     SavePreview(card.surface(), L"card-long-texts", 0x2B2F36);
+}
+
+TEST(Card_shows_a_laptop_battery) {
+    using i18n::Str;
+    CardModel model = DemoCard(i18n::Lang::Portuguese);
+    CardRow battery;
+    battery.id = MetricId::Battery;
+    battery.title = i18n::Get(i18n::Lang::Portuguese, Str::CardBattery);
+    battery.value = L"18%";
+    battery.subtitle =
+        std::wstring(i18n::Get(i18n::Lang::Portuguese, Str::CardBatteryOnBattery)) + L" · " + text::Watts(-9.2, L',') +
+        L" · " + text::Format(i18n::Get(i18n::Lang::Portuguese, Str::CardBatteryLeft), {text::HoursMinutes(3000)});
+    battery.load = kWarnLoad;
+    battery.neutral = true;
+    for (int i = 0; i < 60; ++i) battery.history.push_back(0.48f - 0.005f * static_cast<float>(i));
+    model.rows.push_back(battery);
+    Card card(SharedGfx());
+    card.SetTheme(MakeTheme(false));
+    card.Measure(96, model);
+    CHECK(card.Paint(model));
+    SavePreview(card.surface(), L"card-battery", 0x2B2F36);
 }
 
 TEST(Card_fits_short_screens_with_many_disks) {

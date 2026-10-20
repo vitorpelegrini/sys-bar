@@ -71,6 +71,8 @@ struct Availability {
     bool gpu = false;
     bool vram = false;
     bool disk = false;
+    bool net = false;
+    bool battery = false;
 };
 
 // Metrics shown in the strip, never empty: when every enabled metric is unavailable, CPU is shown.
@@ -84,6 +86,14 @@ bool CanHide(const Settings& settings, MetricId id, const Availability& availabl
 int TemperatureLevel(MetricId id, double celsius);
 // Number of a generic fan name: "Fan #2" -> "2"; other names are returned unchanged.
 std::wstring FanNumber(const std::wstring& name);
+// User corrections of fan roles, stored as "Fan #1=case;Fan #2=cpu" (names without '=' or ';').
+std::vector<std::pair<std::wstring, FanRole>> ParseFanRoles(const std::wstring& text);
+std::wstring FormatFanRoles(const std::vector<std::pair<std::wstring, FanRole>>& roles);
+// Sets (or, with FanRole::Unknown, removes) the correction for `name`.
+std::wstring WithFanRole(const std::wstring& text, const std::wstring& name, FanRole role);
+// The correction for `name`, or `detected` when there is none.
+FanRole EffectiveFanRole(const std::wstring& text, const std::wstring& name, FanRole detected);
+
 // Fill of the card's temperature gauge, 0..1: 20 °C empty, full at 100 °C (processors) or 80 °C (drives).
 float TemperatureGauge(MetricId id, double celsius);
 

@@ -5,7 +5,11 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
+
+// What a fan cools (sensors/SharedBlock.cs: Role). Unknown for unlabeled motherboard headers.
+enum class FanRole { Unknown, Cpu, Gpu, Case, Pump, Psu };
 
 // Native hardware sensors that need neither a kernel driver nor administrator rights.
 namespace hw {
@@ -75,5 +79,65 @@ private:
 
 // "0 C: E:" -> number 0, letters "C: E:". Returns false for "_Total" and malformed names.
 bool ParseDiskInstance(const wchar_t* name, int& number, std::wstring& letters);
+
+// ---- Network ------------------------------------------------------------------------------------
+struct NetInterface {
+    uint64_t luid = 0;
+    std::wstring name;  // "Ethernet", "Wi-Fi"
+    uint64_t inOctets = 0, outOctets = 0;
+    uint64_t linkBps = 0;  // bits per second
+};
+
+// Physical interfaces that are up: no loopback, tunnels, virtual switch ports or filter drivers, so
+// traffic routed through a Hyper-V/WSL switch is counted once, on the real adapter.
+std::vector<NetInterface> ReadNetInterfaces();
+
+struct NetRates {
+    bool available = false;  // at least one physical interface is up
+    uint64_t downBps = 0, upBps = 0;
+    uint64_t linkBps = 0;  // fastest link, bits per second
+    std::wstring names;    // "Ethernet" / "Ethernet + Wi-Fi"
+};
+
+// Turns the cumulative interface counters into rates between two calls.
+class NetworkMeter {
+public:
+    NetRates Update(const std::vector<NetInterface>& now, ULONGLONG tickMs);
+
+private:
+    std::unordered_map<uint64_t, NetInterface> last_;
+    ULONGLONG lastTick_ = 0;
+};
+
+// ---- Battery ------------------------------------------------------------------------------------
+struct BatteryReading {
+    bool present = false;
+    double percent = 0.0;  // 0..100
+    bool acOnline = false;
+    bool charging = false;
+    std::optional<int> secondsLeft;  // on battery, when Windows has an estimate
+    std::optional<double> watts;     // > 0 charging, < 0 discharging
+};
+
+// Laptop battery: charge from GetSystemPowerStatus, power from the battery driver (no admin needed).
+class BatteryMeter {
+public:
+    BatteryMeter() = default;
+    ~BatteryMeter() { Close(); }
+    BatteryMeter(const BatteryMeter&) = delete;
+    BatteryMeter& operator=(const BatteryMeter&) = delete;
+
+    BatteryReading Read();
+    void Close();
+
+private:
+    struct Device {
+        HANDLE file = INVALID_HANDLE_VALUE;
+        ULONG tag = 0;
+    };
+    void Open();
+    std::vector<Device> devices_;
+    bool opened_ = false;
+};
 
 }  // namespace hw

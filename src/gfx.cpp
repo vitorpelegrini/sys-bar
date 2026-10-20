@@ -96,8 +96,10 @@ D2D1_COLOR_F Ink(const Theme& theme, float alpha) {
 
 D2D1_COLOR_F MetricColor(MetricId id, float load, const Theme& theme) {
     if (theme.highContrast) return FromColorRef(theme.hcHighlight);
-    static constexpr uint32_t kDark[kMetricCount] = {0x4CC2FF, 0xB69CFF, 0x4ADE80, 0xF67EC1, 0x2DD4BF};
-    static constexpr uint32_t kLight[kMetricCount] = {0x0067C0, 0x6D3FD9, 0x13803F, 0xC81E73, 0x0F766E};
+    static constexpr uint32_t kDark[kMetricCount] = {0x4CC2FF, 0xB69CFF, 0x4ADE80, 0xF67EC1,
+                                                     0x2DD4BF, 0xFB923C, 0xA3E635};
+    static constexpr uint32_t kLight[kMetricCount] = {0x0067C0, 0x6D3FD9, 0x13803F, 0xC81E73,
+                                                      0x0F766E, 0xC2410C, 0x4D7C0F};
     if (theme.colorByLoad) {
         if (load >= kCriticalLoad) return Rgb(theme.light ? 0xC42B1C : 0xFF6B6B);
         if (load >= kWarnLoad) return Rgb(theme.light ? 0xB35C00 : 0xFFB340);

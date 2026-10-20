@@ -35,6 +35,20 @@ std::wstring TemperatureBadge(double celsius, bool fahrenheit);
 // Card value: "54 °C" / "130 °F".
 std::wstring TemperatureText(double celsius, bool fahrenheit);
 
+// Transfer rate scaled to its unit, at most three digits: 812 KB/s, 4,2 MB/s, 1,1 GB/s.
+// unit: 0 = KB/s, 1 = MB/s, 2 = GB/s.
+struct RateText {
+    std::wstring number;
+    int unit = 0;
+};
+RateText Rate(uint64_t bytesPerSecond, wchar_t decimal);
+// Link speed in bits per second: "1 Gbps", "2,5 Gbps", "100 Mbps".
+std::wstring LinkSpeed(uint64_t bitsPerSecond, wchar_t decimal);
+// "2 h 05 min", "45 min".
+std::wstring HoursMinutes(int seconds);
+// Battery power: "+12 W" (charging), "-8,4 W" (discharging).
+std::wstring Watts(double watts, wchar_t decimal);
+
 // First drive letter of a PDH disk instance in alphabetical order: "E: C:" -> "C:"; "" when none.
 std::wstring FirstDriveLetter(std::wstring_view letters);
 

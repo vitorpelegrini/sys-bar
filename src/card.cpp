@@ -352,8 +352,9 @@ void Card::DrawSparkline(const CardRow& row, int capacity, const D2D1_RECT_F& ar
     // Colors by load band along the vertical axis (same thresholds as the strip): history above 80%
     // turns amber and above 92% red, showing *when* the load was high.
     const D2D1_COLOR_F base = MetricColor(row.id, 0.0f, theme_);
-    const D2D1_COLOR_F warn = theme_.colorByLoad ? MetricColor(row.id, kWarnLoad, theme_) : base;
-    const D2D1_COLOR_F crit = theme_.colorByLoad ? MetricColor(row.id, kCriticalLoad, theme_) : base;
+    const bool bands = theme_.colorByLoad && !row.neutral;
+    const D2D1_COLOR_F warn = bands ? MetricColor(row.id, kWarnLoad, theme_) : base;
+    const D2D1_COLOR_F crit = bands ? MetricColor(row.id, kCriticalLoad, theme_) : base;
     const float fillAlpha = light ? 0.26f : 0.34f;
     constexpr float kEdge = 0.0005f;  // hard transition between bands
     // Gradient position 0 = value 100% (top), 1 = value 0% (bottom).

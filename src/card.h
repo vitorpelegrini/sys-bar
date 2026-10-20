@@ -16,6 +16,7 @@ struct CardRow {
     float load = 0.0f;
     std::vector<float> history;  // oldest to newest, 0..1
     bool half = false;           // shares its line with the next half row (e.g. one per disk)
+    bool neutral = false;        // no amber/red load bands (network, battery: high is not "bad")
 };
 
 // One tile of the "Sensors" grid: a device with its temperature and the fans that cool it.

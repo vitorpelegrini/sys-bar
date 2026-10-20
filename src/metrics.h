@@ -33,8 +33,6 @@ struct DiskSnapshot {
 
 enum class SensorKind { Temperature, Fan };
 enum class SensorGroup { Cpu, Gpu, Disk, Board };
-// What a fan cools (sensors/SharedBlock.cs: Role). Unknown for unlabeled motherboard headers.
-enum class FanRole { Unknown, Cpu, Gpu, Case, Pump, Psu };
 
 // A reading for the card's "Sensors" section.
 struct SensorReading {
@@ -63,6 +61,9 @@ struct MetricsSnapshot {
     uint64_t diskReadBps = 0;  // all physical disks
     uint64_t diskWriteBps = 0;
     std::vector<DiskSnapshot> disks;
+
+    hw::NetRates network;  // physical adapters
+    hw::BatteryReading battery;
 
     bool advancedSensors = false;          // the advanced sensors service is publishing
     std::optional<double> cpuTemperature;  // °C (advanced sensors)
@@ -161,6 +162,8 @@ private:
     std::vector<BYTE> diskBuffers_[3];
     hw::GpuSensors gpuSensors_;
     hw::StorageDevices storage_;
+    hw::NetworkMeter network_;
+    hw::BatteryMeter battery_;
     std::unique_ptr<feed::SensorFeed> feed_;                  // advanced sensors service (optional)
     ULONGLONG nextServiceUpdate_ = 0;                         // next time an outdated service may be asked
     std::unordered_map<int, ULONGLONG> lastTemperatureRead_;  // disk number -> tick

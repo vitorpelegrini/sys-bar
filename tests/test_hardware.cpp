@@ -35,6 +35,43 @@ TEST(Storage_devices_enumerate_without_admin) {
     }
 }
 
+TEST(Network_meter_turns_counters_into_rates) {
+    hw::NetworkMeter meter;
+    hw::NetInterface eth{1, L"Ethernet", 1'000'000, 500'000, 1'000'000'000ull};
+    hw::NetInterface wifi{2, L"Wi-Fi", 0, 0, 300'000'000ull};
+    hw::NetRates r = meter.Update({eth, wifi}, 10'000);
+    CHECK(r.available);
+    CHECK_EQ(r.downBps, uint64_t{0});  // first call: nothing to compare with
+    CHECK_EQ(r.names, std::wstring(L"Ethernet + Wi-Fi"));
+    CHECK_EQ(r.linkBps, uint64_t{1'000'000'000ull});
+
+    eth.inOctets += 2'000'000;  // 2 MB down and 1 MB up in 2 s
+    eth.outOctets += 1'000'000;
+    wifi.inOctets += 200'000;
+    r = meter.Update({eth, wifi}, 12'000);
+    CHECK_EQ(r.downBps, uint64_t{1'100'000});
+    CHECK_EQ(r.upBps, uint64_t{500'000});
+
+    eth.inOctets = 10;  // counter reset (adapter restarted): no bogus spike
+    r = meter.Update({eth}, 13'000);
+    CHECK_EQ(r.downBps, uint64_t{0});
+    CHECK_EQ(r.names, std::wstring(L"Ethernet"));
+
+    CHECK(!meter.Update({}, 14'000).available);
+}
+
+TEST(Network_and_battery_read_without_admin) {
+    const auto interfaces = hw::ReadNetInterfaces();
+    for (const auto& i : interfaces) {
+        std::printf("      network: %s, link %llu Mbps\n", t::Narrow(i.name).c_str(),
+                    static_cast<unsigned long long>(i.linkBps / 1'000'000));
+    }
+    hw::BatteryMeter battery;
+    const hw::BatteryReading b = battery.Read();
+    std::printf("      battery: %s\n", b.present ? "present" : "none");
+    if (b.present) CHECK(b.percent >= 0.0 && b.percent <= 100.0);
+}
+
 TEST(Disk_kind_names) {
     CHECK_EQ(std::wstring(hw::DiskKindName(hw::DiskKind::Nvme)), std::wstring(L"NVMe"));
     CHECK_EQ(std::wstring(hw::DiskKindName(hw::DiskKind::Ssd)), std::wstring(L"SSD"));

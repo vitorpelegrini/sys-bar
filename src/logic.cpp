@@ -99,7 +99,9 @@ std::vector<MetricId> VisibleMetrics(const Settings& s, const Availability& a) {
     if (s.showRam) out.push_back(MetricId::Ram);
     if (s.showGpu && a.gpu) out.push_back(MetricId::Gpu);
     if (s.showVram && a.gpu && a.vram) out.push_back(MetricId::Vram);
+    if (s.showNet && a.net) out.push_back(MetricId::Net);
     if (s.showDisk && a.disk) out.push_back(MetricId::Disk);
+    if (s.showBattery && a.battery) out.push_back(MetricId::Battery);
     if (out.empty()) out.push_back(MetricId::Cpu);  // never leave the user without anything to click
     return out;
 }
@@ -112,10 +114,12 @@ bool CanHide(const Settings& s, MetricId id, const Availability& a) {
         case MetricId::Gpu: copy.showGpu = false; break;
         case MetricId::Vram: copy.showVram = false; break;
         case MetricId::Disk: copy.showDisk = false; break;
+        case MetricId::Net: copy.showNet = false; break;
+        case MetricId::Battery: copy.showBattery = false; break;
     }
     // Hiding is allowed only if something that is actually available stays enabled.
     return copy.showCpu || copy.showRam || (copy.showGpu && a.gpu) || (copy.showVram && a.gpu && a.vram) ||
-           (copy.showDisk && a.disk);
+           (copy.showDisk && a.disk) || (copy.showNet && a.net) || (copy.showBattery && a.battery);
 }
 
 bool SeparateDisks(const Settings& s, size_t diskCount) {
@@ -129,6 +133,63 @@ std::wstring DiskStripLabel(hw::DiskKind kind, const std::wstring& letters, int 
     label += L' ';
     label += letter.empty() ? std::to_wstring(number) : letter;
     return label;
+}
+
+namespace {
+
+constexpr std::pair<FanRole, const wchar_t*> kRoleCodes[] = {{FanRole::Cpu, L"cpu"},
+                                                             {FanRole::Gpu, L"gpu"},
+                                                             {FanRole::Case, L"case"},
+                                                             {FanRole::Pump, L"pump"},
+                                                             {FanRole::Psu, L"psu"}};
+
+}  // namespace
+
+std::vector<std::pair<std::wstring, FanRole>> ParseFanRoles(const std::wstring& text) {
+    std::vector<std::pair<std::wstring, FanRole>> out;
+    size_t start = 0;
+    while (start <= text.size()) {
+        size_t end = text.find(L';', start);
+        if (end == std::wstring::npos) end = text.size();
+        const std::wstring item = text.substr(start, end - start);
+        if (const auto eq = item.rfind(L'='); eq != std::wstring::npos && eq > 0) {
+            const std::wstring name = text::Trim(item.substr(0, eq));
+            const std::wstring code = text::Trim(item.substr(eq + 1));
+            for (const auto& [role, roleCode] : kRoleCodes) {
+                if (_wcsicmp(code.c_str(), roleCode) == 0 && !name.empty()) {
+                    std::erase_if(out, [&](const auto& p) { return p.first == name; });
+                    out.emplace_back(name, role);
+                }
+            }
+        }
+        start = end + 1;
+    }
+    return out;
+}
+
+std::wstring FormatFanRoles(const std::vector<std::pair<std::wstring, FanRole>>& roles) {
+    std::wstring out;
+    for (const auto& [name, role] : roles) {
+        if (name.empty() || name.find_first_of(L"=;") != std::wstring::npos) continue;
+        for (const auto& [known, code] : kRoleCodes) {
+            if (known == role) out += (out.empty() ? L"" : L";") + name + L"=" + code;
+        }
+    }
+    return out;
+}
+
+std::wstring WithFanRole(const std::wstring& text, const std::wstring& name, FanRole role) {
+    auto roles = ParseFanRoles(text);
+    std::erase_if(roles, [&](const auto& p) { return p.first == name; });
+    if (role != FanRole::Unknown) roles.emplace_back(name, role);
+    return FormatFanRoles(roles);
+}
+
+FanRole EffectiveFanRole(const std::wstring& text, const std::wstring& name, FanRole detected) {
+    for (const auto& [n, role] : ParseFanRoles(text)) {
+        if (n == name) return role;
+    }
+    return detected;
 }
 
 std::wstring FanNumber(const std::wstring& name) {

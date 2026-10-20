@@ -38,13 +38,17 @@
   - Temperatura e fan da GPU, e temperatura dos NVMe, sem precisar de driver.
   - Os **sensores avançados** opcionais acrescentam a temperatura da CPU, as fans da placa-mãe e de
     controladoras e a temperatura de discos SATA (veja abaixo). Cada fan é associada ao que ela resfria (CPU,
-    GPU, gabinete, bomba, fonte), e a fan da GPU parada no modo zero RPM aparece como parada.
+    GPU, gabinete, bomba, fonte), e a fan da GPU parada no modo zero RPM aparece como parada. Se a placa dá
+    nomes genéricos às fans, o menu deixa você dizer qual é qual.
+- **Rede e bateria.** Download e upload com a velocidade do link (opcional, pelo menu). Em notebooks, a carga
+  da bateria, o consumo em watts e o tempo restante; âmbar em 20% e vermelho em 10% fora da tomada.
 - **Se atualiza sozinho.** Consulta as Releases do GitHub uma vez por dia. As atualizações são verificadas por
   SHA-256 e instaladas em silêncio.
 - **Card ao passar o mouse.** Mostra o modelo do hardware, os picos e um gráfico do último minuto
-  para cada métrica. O histórico acima de 80% / 92% de carga fica âmbar / vermelho.
+  para cada métrica. O histórico acima de 80% / 92% de carga fica âmbar / vermelho. Sempre cabe na tela:
+  os discos ficam lado a lado e, em telas baixas, o card alarga e encurta os gráficos em vez de cortar texto.
 - **Leve.** Um único `.exe` nativo de ~500 KB (C++20, Win32, Direct2D), sem dependências.
-  - Cerca de 0,5% de um núcleo de CPU e 12 MB de RAM.
+  - Cerca de 1% de um núcleo de CPU e menos de 20 MB de RAM, medindo a cada segundo.
   - Desenho por software, para não pesar na GPU que está medindo.
   - Pausa com a tela desligada.
 - **Visual nativo.**

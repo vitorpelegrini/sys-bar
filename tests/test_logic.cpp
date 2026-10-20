@@ -262,6 +262,40 @@ TEST(Disk_strip_labels) {
     CHECK_EQ(logic::DiskStripLabel(DiskKind::Unknown, L"F:", 3, L"DISCO"), std::wstring(L"DISCO F:"));
 }
 
+TEST(Fan_role_corrections) {
+    CHECK(logic::ParseFanRoles(L"").empty());
+    auto roles = logic::ParseFanRoles(L"Fan #1=case; Fan #2 = CPU;bogus;Fan #3=toaster;=cpu");
+    CHECK_EQ(roles.size(), size_t{2});
+    CHECK(logic::EffectiveFanRole(L"Fan #1=case", L"Fan #1", FanRole::Cpu) == FanRole::Case);
+    CHECK(logic::EffectiveFanRole(L"Fan #1=case", L"Fan #2", FanRole::Cpu) == FanRole::Cpu);  // no correction
+    std::wstring text = logic::WithFanRole(L"", L"Fan #1", FanRole::Pump);
+    CHECK_EQ(text, std::wstring(L"Fan #1=pump"));
+    text = logic::WithFanRole(text, L"Fan #2", FanRole::Psu);
+    text = logic::WithFanRole(text, L"Fan #1", FanRole::Case);  // replaced, not duplicated
+    CHECK_EQ(text, std::wstring(L"Fan #2=psu;Fan #1=case"));
+    text = logic::WithFanRole(text, L"Fan #2", FanRole::Unknown);  // back to automatic
+    CHECK_EQ(text, std::wstring(L"Fan #1=case"));
+    CHECK_EQ(logic::WithFanRole(L"", L"bad=name", FanRole::Cpu), std::wstring(L""));  // never corrupts the format
+}
+
+TEST(Network_and_battery_columns) {
+    Settings s;
+    logic::Availability a{true, true, true, true, true};
+    auto v = logic::VisibleMetrics(s, a);
+    CHECK(std::find(v.begin(), v.end(), MetricId::Net) == v.end());  // network is opt-in
+    CHECK(std::find(v.begin(), v.end(), MetricId::Battery) != v.end());
+    s.showNet = true;
+    v = logic::VisibleMetrics(s, a);
+    CHECK(std::find(v.begin(), v.end(), MetricId::Net) != v.end());
+    a.battery = false;  // desktops never show a battery column
+    v = logic::VisibleMetrics(s, a);
+    CHECK(std::find(v.begin(), v.end(), MetricId::Battery) == v.end());
+    Settings only;
+    only.showCpu = only.showRam = only.showGpu = only.showVram = only.showDisk = only.showBattery = false;
+    only.showNet = true;
+    CHECK(!logic::CanHide(only, MetricId::Net, a));
+}
+
 TEST(Fan_numbers_and_temperature_gauges) {
     CHECK_EQ(logic::FanNumber(L"Fan #2"), std::wstring(L"2"));
     CHECK_EQ(logic::FanNumber(L"Fan #12"), std::wstring(L"12"));

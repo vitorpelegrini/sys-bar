@@ -26,7 +26,13 @@ First public release.
 - The card's "Sensors" section is a grid of tiles, one per device, each with a temperature gauge and the fans
   that cool it. Fans are matched to the CPU, GPU, case, pump or power supply from the board's labels or, on
   boards with generic "Fan #N" names, from the Super I/O reference wiring; a GPU fan in zero-RPM mode shows
-  as stopped.
+  as stopped. A "Fans" menu corrects the role of any motherboard fan.
+- Network: download/upload of the physical adapters (no loopback, tunnels or virtual switches), link
+  utilization in the strip and a self-scaling graph in the card. Off by default, enabled from the menu.
+- Battery (laptops only): charge, charging state, power in watts and time left; amber at 20% and red at 10%
+  when unplugged.
+- The card always fits the screen: drives are shown side by side, and on short screens it widens, then
+  shortens its graphs, instead of running off the screen. Long texts wrap instead of being cut.
 - Temperatures without drivers or administrator rights: GPU temperature and fan speed (WDDM 2.7+), NVMe/SSD
   temperatures; shown as badges in the strip and in a "Sensors" section of the card. Disk temperatures are
   only read while a drive is busy, so sleeping hard drives are never woken up.
