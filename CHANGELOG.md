@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-20
+
 ### Changed
 
 - About half the CPU time, same pixels and same numbers. Measured side by side against 1.0.0 on a 36-thread
@@ -103,5 +105,6 @@ First public release.
   rollback, and backs off for a day after a failed update.
 - No telemetry: the only network traffic is the update check, which can be turned off.
 
-[Unreleased]: https://github.com/vitorpelegrini/sys-bar/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/vitorpelegrini/sys-bar/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/vitorpelegrini/sys-bar/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/vitorpelegrini/sys-bar/releases/tag/v1.0.0

@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 
 # The version lives here and only here: it flows into version.h, the .exe resources, the installer
 # and the release workflow.
-project(sys-bar VERSION 1.0.0 LANGUAGES CXX RC)
+project(sys-bar VERSION 1.0.1 LANGUAGES CXX RC)
 set(SYSBAR_PROJECT_URL "https://github.com/vitorpelegrini/sys-bar")
 set(SYSBAR_RELEASES_API "https://api.github.com/repos/vitorpelegrini/sys-bar/releases/latest")
 

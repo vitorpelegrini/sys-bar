@@ -100,7 +100,7 @@ Right-click it for everything else.
 - **In your language**: English, Português, Español, Français, Deutsch, Italiano, Polski, Türkçe, Русский,
   Українська, 日本語, 한국어, 简体中文 and 繁體中文, following Windows by default.
 
-### 🪶 Light and robust
+### 🍃 Light and robust
 
 - **One small native executable** (C++20, Win32, Direct2D), no runtime, no dependencies. Software rendering,
   so it never loads the GPU it measures; paused while the screen is off or the session is locked.

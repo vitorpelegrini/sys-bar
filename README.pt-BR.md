@@ -102,7 +102,7 @@ Gerenciador de Tarefas. Botão direito para todo o resto.
 - **No seu idioma**: English, Português, Español, Français, Deutsch, Italiano, Polski, Türkçe, Русский,
   Українська, 日本語, 한국어, 简体中文 e 繁體中文, seguindo o Windows por padrão.
 
-### 🪶 Leve e robusto
+### 🍃 Leve e robusto
 
 - **Um único executável nativo pequeno** (C++20, Win32, Direct2D), sem runtime nem dependências. Desenho por
   software, para não pesar na GPU que está medindo; pausa com a tela desligada ou a sessão bloqueada.
