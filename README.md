@@ -47,7 +47,7 @@
 
 Task Manager tells you everything, but only once you open it. Desktop widgets and overlays get covered by
 windows or cover them. sys-bar puts the numbers you glance at all day **inside the taskbar itself**, next to
-the clock: always visible, never in the way, and costing about 1% of one CPU core.
+the clock: always visible, never in the way, and costing about half a percent of one CPU core.
 
 Hover it for a detailed card with one-minute graphs, temperatures and fans. Click it for Task Manager.
 Right-click it for everything else.
@@ -102,9 +102,20 @@ Right-click it for everything else.
 
 ### 🪶 Light and robust
 
-- **One small native executable** (C++20, Win32, Direct2D), no runtime, no dependencies.
-  About 1% of one CPU core and under 20 MB of RAM, sampling every second; software rendering, so it never
-  loads the GPU it measures; paused while the screen is off or the session is locked.
+- **One small native executable** (C++20, Win32, Direct2D), no runtime, no dependencies. Software rendering,
+  so it never loads the GPU it measures; paused while the screen is off or the session is locked.
+- **Measured, not promised.** Two minutes of normal use, sampling every second, on a 36-thread desktop:
+
+  | | sys-bar | Sensors service (optional) | Together |
+  | --- | --- | --- | --- |
+  | CPU | 0.55% of one core | 0.27% of one core | **0.02% of the machine** |
+  | Memory | 24 MB (9 MB private) | 52 MB (25 MB private) | **76 MB** |
+  | GPU | 0.01% | 0% | **0.01%** |
+  | Disk | 0 bytes read or written | 0 bytes | **0 bytes** |
+
+  Animation frames repaint only the bars that moved (a few microseconds each), the network is read through
+  the adapters in use rather than the whole interface table, and fans, which only the card shows, are read
+  at full rate only while it is open.
 - **Survives the real world**: Explorer restarts, driver resets, sleep and resume, DPI and display changes,
   monitors coming and going, drives plugged in and ejected.
 - **Updates itself** from GitHub Releases, verified before anything runs (see

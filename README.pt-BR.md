@@ -47,7 +47,8 @@
 
 O Gerenciador de Tarefas mostra tudo, mas só quando você o abre. Widgets e overlays ficam atrás das janelas ou
 na frente delas. O sys-bar coloca os números que você confere o dia inteiro **dentro da própria barra de
-tarefas**, ao lado do relógio: sempre visíveis, nunca no caminho, e custando cerca de 1% de um núcleo de CPU.
+tarefas**, ao lado do relógio: sempre visíveis, nunca no caminho, e custando cerca de meio por cento de um
+núcleo de CPU.
 
 Passe o mouse para ver um card detalhado com gráficos do último minuto, temperaturas e fans. Clique para abrir o
 Gerenciador de Tarefas. Botão direito para todo o resto.
@@ -103,9 +104,20 @@ Gerenciador de Tarefas. Botão direito para todo o resto.
 
 ### 🪶 Leve e robusto
 
-- **Um único executável nativo pequeno** (C++20, Win32, Direct2D), sem runtime nem dependências. Cerca de 1% de
-  um núcleo de CPU e menos de 20 MB de RAM, medindo a cada segundo; desenho por software, para não pesar na
-  GPU que está medindo; pausa com a tela desligada ou a sessão bloqueada.
+- **Um único executável nativo pequeno** (C++20, Win32, Direct2D), sem runtime nem dependências. Desenho por
+  software, para não pesar na GPU que está medindo; pausa com a tela desligada ou a sessão bloqueada.
+- **Medido, não prometido.** Dois minutos de uso normal, medindo a cada segundo, num desktop de 36 threads:
+
+  | | sys-bar | Serviço de sensores (opcional) | Juntos |
+  | --- | --- | --- | --- |
+  | CPU | 0,55% de um núcleo | 0,27% de um núcleo | **0,02% da máquina** |
+  | Memória | 24 MB (9 MB exclusivos) | 52 MB (25 MB exclusivos) | **76 MB** |
+  | GPU | 0,01% | 0% | **0,01%** |
+  | Disco | 0 bytes lidos ou gravados | 0 bytes | **0 bytes** |
+
+  Os quadros de animação redesenham só as barrinhas que se mexeram (alguns microssegundos cada), a rede é
+  lida pelas placas em uso em vez da tabela inteira de interfaces, e as fans, que só aparecem no card, são
+  lidas a cada segundo só enquanto ele está aberto.
 - **Aguenta o mundo real**: Explorer reiniciando, driver de vídeo resetando, suspensão, mudanças de DPI e de
   tela, monitores e discos conectados e removidos.
 - **Se atualiza sozinho** pelas Releases do GitHub, verificando tudo antes de rodar (veja
