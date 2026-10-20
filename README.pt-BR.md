@@ -42,6 +42,8 @@
     nomes genéricos às fans, o menu deixa você dizer qual é qual.
 - **Rede e bateria.** Download e upload com a velocidade do link (opcional, pelo menu). Em notebooks, a carga
   da bateria, o consumo em watts e o tempo restante; âmbar em 20% e vermelho em 10% fora da tomada.
+- **Todos os monitores.** Uma faixa em cada barra de tarefas, no Windows 10 e no Windows 11, acompanhando os
+  monitores conforme são conectados e desconectados.
 - **Se atualiza sozinho.** Consulta as Releases do GitHub uma vez por dia. As atualizações são verificadas por
   SHA-256 e instaladas em silêncio.
 - **Card ao passar o mouse.** Mostra o modelo do hardware, os picos e um gráfico do último minuto

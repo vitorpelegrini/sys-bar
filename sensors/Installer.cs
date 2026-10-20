@@ -38,16 +38,15 @@ namespace SysBar.Sensors
         {
             if (!IsAdministrator()) return ExitNotAdmin;
             string source = AppDomain.CurrentDomain.BaseDirectory;
+            bool stopped = false;
             try
             {
-                // Our own image first, through a handle that also blocks renames: the running file cannot be
-                // swapped under us between now and the copy.
-                byte[] self = Manifest.ReadLocked(Path.Combine(source, ExeName));
-                StopService();
-
+                // Everything is read and checked before the running service is touched: a refused install
+                // leaves the installed one exactly as it was, running. Our own image is read through a
+                // handle that also blocks renames, so the running file cannot be swapped under us.
+                var files = new List<KeyValuePair<string, byte[]>>();
                 if (!SamePath(source, Target))
                 {
-                    Directory.CreateDirectory(Target);
                     Dictionary<string, string>? manifest = Manifest.Load();
                     if (manifest == null) Log.Write("install: development build (no manifest), copying by file type");
                     IEnumerable<string> names = manifest?.Keys ??
@@ -62,15 +61,27 @@ namespace SysBar.Sensors
                             Log.Write($"install refused: {name} does not match this release");
                             return ExitFailed;
                         }
-                        Manifest.WriteAtomic(Path.Combine(Target, name), data);
+                        files.Add(new KeyValuePair<string, byte[]>(name, data));
                     }
-                    Manifest.WriteAtomic(Path.Combine(Target, ExeName), self);
+                    files.Add(new KeyValuePair<string, byte[]>(ExeName, Manifest.ReadLocked(Path.Combine(source, ExeName))));
+                }
+
+                stopped = true;
+                StopService();
+                if (files.Count > 0)
+                {
+                    Directory.CreateDirectory(Target);
+                    foreach (var file in files) Manifest.WriteAtomic(Path.Combine(Target, file.Key), file.Value);
                 }
 
                 if (!DriverInstalled("PawnIO"))
                 {
                     int result = InstallPawnIO(source);
-                    if (result != ExitOk) return result;
+                    if (result != ExitOk)
+                    {
+                        TryStartService();
+                        return result;
+                    }
                 }
 
                 string exe = Path.Combine(Target, "sys-bar-sensors.exe");
@@ -96,7 +107,22 @@ namespace SysBar.Sensors
             catch (Exception e)
             {
                 Log.Write($"install failed: {e}");
+                if (stopped) TryStartService();  // never leave a working installation stopped
                 return ExitFailed;
+            }
+        }
+
+        private static void TryStartService()
+        {
+            try
+            {
+                if (!ServiceExists()) return;
+                using var service = new ServiceController(SensorService.Name);
+                if (service.Status == ServiceControllerStatus.Stopped) service.Start();
+            }
+            catch (Exception e)
+            {
+                Log.Write($"restart after a failed install failed: {e.Message}");
             }
         }
 

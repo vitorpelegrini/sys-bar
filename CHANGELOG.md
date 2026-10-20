@@ -31,6 +31,11 @@ First public release.
   utilization in the strip and a self-scaling graph in the card. Off by default, enabled from the menu.
 - Battery (laptops only): charge, charging state, power in watts and time left; amber at 20% and red at 10%
   when unplugged.
+- A strip on every taskbar: other monitors too (Windows 10 classic and Windows 11 layouts), each with its own
+  size, DPI and hover card; monitors coming and going are followed live. "Show on all taskbars" in the menu.
+  On Windows 11, where the clock has no window of its own, its position is measured through UI Automation.
+- Icons in the card's details (processor, memory, GPU, drive, read/write, network, peak, battery) and a footer
+  with the version and the update status (checking, up to date, new version available).
 - The card always fits the screen: drives are shown side by side, and on short screens it widens, then
   shortens its graphs, instead of running off the screen. Long texts wrap instead of being cut.
 - Temperatures without drivers or administrator rights: GPU temperature and fan speed (WDDM 2.7+), NVMe/SSD
@@ -49,6 +54,10 @@ First public release.
 - Recovers automatically when Explorer restarts, the GPU driver resets or the display layout
   changes; pauses sampling while the display is off or the session is locked.
 - Installer (per-user, no administrator rights, x64 and ARM64) and portable zips.
+- Hardened elevation: the one elevated step (installing the advanced sensors) takes nothing on trust from the
+  per-user folder it starts from: every library must match a SHA-256 manifest built into the executable, and
+  the PawnIO installer a pinned hash. Silent updates never ask for elevation; removal runs the copy in Program
+  Files. Once releases are code-signed, updates must carry the same signature.
 - Optional advanced sensors (x64): CPU temperature, motherboard/controller fans and SATA drive temperatures
   through a small LocalSystem service built on LibreHardwareMonitorLib and the PawnIO driver. It is enabled
   from the installer or the menu (one UAC prompt), runs from Program Files, publishes through read-only shared

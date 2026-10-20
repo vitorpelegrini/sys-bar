@@ -41,6 +41,8 @@
     you say which is which.
 - **Network and battery.** Download and upload with the link speed (optional, from the menu). On laptops, the
   battery charge, power draw in watts and time left; amber at 20% and red at 10% when unplugged.
+- **Every monitor.** A strip on each taskbar, on Windows 10 and Windows 11, following monitors as they come
+  and go.
 - **Updates itself.** A daily check of GitHub Releases. Updates are verified by SHA-256 and installed silently.
 - **Hover card.** Shows the hardware model, peaks and a one-minute graph per metric. History above
   80% / 92% load turns amber / red. It always fits the screen: drives sit side by side, and on short
