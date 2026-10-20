@@ -521,8 +521,9 @@ D2D1_COLOR_F Mix(const D2D1_COLOR_F& a, const D2D1_COLOR_F& b, float t) {
 }  // namespace
 
 // A small, realistic thermometer: a snowflake on the cold end, a flame on the hot end, a glass tube with
-// scale marks every 10 °C (the warm and hot thresholds highlighted), and a liquid column whose color goes
-// from icy blue through green and amber to red along the scale. The bulb holds the current color.
+// scale marks every 10 °C (the warm and hot thresholds highlighted), and a liquid column that stays neutral
+// grey while the device is comfortable and only warms up towards yellow, amber (warm) and red (hot). The bulb
+// holds the current color.
 void Card::DrawThermometer(const CardSensorLine& tile, float left, float right, float top) {
     const bool light = theme_.light;
     const float bulbR = kBulbSize / 2.0f;
@@ -560,18 +561,21 @@ void Card::DrawThermometer(const CardSensorLine& tile, float left, float right, 
     const float liquidR = std::max(glassR - wall, 1.0f / scale_);
     auto at = [&](float gauge) { return tubeLeft + (tubeRight - wall - tubeLeft) * std::clamp(gauge, 0.0f, 1.0f); };
 
-    // Scale: icy blue -> green -> amber at the warm mark -> red at the hot mark.
-    const D2D1_COLOR_F cold = Rgb(light ? 0x2563EB : 0x60A5FA);
-    const D2D1_COLOR_F fine = Rgb(light ? 0x16A34A : 0x4ADE80);
+    // Scale: neutral grey while comfortable -> yellow -> amber at the warm mark -> red at the hot mark.
+    const D2D1_COLOR_F cold = Rgb(light ? 0x8A8F98 : 0x9AA0A8);
+    const D2D1_COLOR_F fine = cold;  // still neutral halfway to the warm mark
+    const D2D1_COLOR_F yellow = Rgb(light ? 0xA16207 : 0xF5D04A);
     const D2D1_COLOR_F warm = Rgb(light ? 0xB35C00 : 0xFFB340);
     const D2D1_COLOR_F hot = Rgb(light ? 0xC42B1C : 0xFF6B6B);
     const float warmAt = std::clamp(tile.warmAt, 0.05f, 0.98f);
     const float hotAt = std::clamp(tile.hotAt, warmAt + 0.01f, 0.99f);
-    const float fineAt = warmAt * 0.45f;
+    const float fineAt = warmAt * 0.55f;
+    const float yellowAt = warmAt * 0.85f;
     auto colorAt = [&](float g) {
         if (theme_.highContrast) return FromColorRef(theme_.hcHighlight);
         if (g <= fineAt) return Mix(cold, fine, g / fineAt);
-        if (g <= warmAt) return Mix(fine, warm, (g - fineAt) / (warmAt - fineAt));
+        if (g <= yellowAt) return Mix(fine, yellow, (g - fineAt) / (yellowAt - fineAt));
+        if (g <= warmAt) return Mix(yellow, warm, (g - yellowAt) / (warmAt - yellowAt));
         if (g <= hotAt) return Mix(warm, hot, (g - warmAt) / (hotAt - warmAt));
         return hot;
     };
@@ -586,17 +590,15 @@ void Card::DrawThermometer(const CardSensorLine& tile, float left, float right, 
     target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(bulbX, cy), bulbR, bulbR), brush_.Get());
 
     // Liquid column with the scale's gradient (so its tip shows the current color), and the bulb.
-    const D2D1_GRADIENT_STOP stops[] = {{0.0f, colorAt(0.0f)},
-                                        {fineAt, colorAt(fineAt)},
-                                        {warmAt, colorAt(warmAt)},
-                                        {hotAt, colorAt(hotAt)},
-                                        {1.0f, colorAt(1.0f)}};
+    const D2D1_GRADIENT_STOP stops[] = {{0.0f, colorAt(0.0f)},         {fineAt, colorAt(fineAt)},
+                                        {yellowAt, colorAt(yellowAt)}, {warmAt, colorAt(warmAt)},
+                                        {hotAt, colorAt(hotAt)},       {1.0f, colorAt(1.0f)}};
     ComPtr<ID2D1GradientStopCollection> collection;
     ComPtr<ID2D1LinearGradientBrush> gradient;
     const float tip = std::max(at(level), tubeLeft + 2.0f * liquidR);
     const D2D1_ROUNDED_RECT column =
         D2D1::RoundedRect(D2D1::RectF(tubeLeft, cy - liquidR, tip, cy + liquidR), liquidR, liquidR);
-    if (SUCCEEDED(target_->CreateGradientStopCollection(stops, 5, &collection)) &&
+    if (SUCCEEDED(target_->CreateGradientStopCollection(stops, static_cast<UINT32>(std::size(stops)), &collection)) &&
         SUCCEEDED(target_->CreateLinearGradientBrush(
             D2D1::LinearGradientBrushProperties(D2D1::Point2F(at(0.0f), cy), D2D1::Point2F(at(1.0f), cy)),
             collection.Get(), &gradient))) {
