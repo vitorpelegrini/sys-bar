@@ -64,7 +64,17 @@ size_t TileRows(size_t tiles, int columns) {
 }
 
 bool HasSensors(const CardModel& m) {
-    return !m.sensorsTitle.empty() && (!m.sensors.empty() || !m.sensorsHint.empty());
+    return !m.sensorsTitle.empty() && (!m.sensors.empty() || !m.fans.empty() || !m.sensorsHint.empty());
+}
+
+constexpr float kFanLineHeight = 30.0f;  // a compact fan tile
+constexpr float kFanIconSize = 13.0f;
+
+float FanRowsHeight(const CardModel& m, int columns, bool afterTiles) {
+    const size_t rows = TileRows(m.fans.size(), columns);
+    if (!rows) return 0.0f;
+    return (afterTiles ? kTileGap : 0.0f) + static_cast<float>(rows) * kFanLineHeight +
+           static_cast<float>(rows - 1) * kTileGap;
 }
 
 // Height of the optional sections between the graphs and the footer (sensors, notice).
@@ -74,7 +84,8 @@ float ExtraHeight(const CardModel& m, int tileColumns) {
         const size_t rows = TileRows(m.sensors.size(), tileColumns);
         h += kSectionGap + kSmallSize * kCap + kSectionTitleGap;
         if (rows) h += static_cast<float>(rows) * TileHeight() + static_cast<float>(rows - 1) * kTileGap;
-        if (!m.sensorsHint.empty()) h += (rows ? 6.0f : 0.0f) + kHintLine;
+        h += FanRowsHeight(m, tileColumns, rows > 0);
+        if (!m.sensorsHint.empty()) h += (rows || !m.fans.empty() ? 6.0f : 0.0f) + kHintLine;
     }
     if (!m.notice.empty()) h += kNoticeGap + kSmallSize * kCap;
     return h;
@@ -211,6 +222,12 @@ SIZE Card::Measure(UINT dpi, const CardModel& model, int maxHeightPx, int maxWid
                                    std::max(11.0f + width(tile.title, kTileTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD) +
                                                 12.0f + width(tile.value, kTileValueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD),
                                             width(tile.detail, kTileDetailSize, DWRITE_FONT_WEIGHT_NORMAL)));
+    }
+    for (const CardFanLine& fan : model.fans) {
+        const std::wstring speed = fan.percent.empty() ? fan.speed : fan.speed + L"  " + fan.percent;
+        tileNeed = std::max(tileNeed, 2.0f * kTilePad + kFanIconSize + 7.0f +
+                                          width(fan.title, kTileTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD) + 12.0f +
+                                          width(Stable(speed), kTileTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD));
     }
     if (tileNeed > 0.0f) needed = std::max(needed, 2.0f * tileNeed + kTileGap);
     needed = std::max(needed, width(model.sensorsHint, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL));
@@ -504,11 +521,66 @@ void Card::DrawSensorTile(const CardSensorLine& tile, const D2D1_RECT_F& area) {
     const float gh = kGaugeHeight;
     if (tile.gauge >= 0.0f) DrawThermometer(tile, left, right, gaugeTop);
 
-    // Detail: the fans of this device, or its model.
+    // Detail: the fans of this device (after a fan icon), or its model.
     if (!tile.detail.empty()) {
-        auto detail = Wrapped(tile.detail, kTileDetailSize, DWRITE_FONT_WEIGHT_NORMAL, TileDetailWidth());
-        DrawText(detail.Get(), left, gaugeTop + gh + kGaugeToDetail + kTileDetailSize * kCap, faint);
+        const float detailBase = gaugeTop + gh + kGaugeToDetail + kTileDetailSize * kCap;
+        float x = left;
+        if (tile.fanDetail) {
+            const float r = kTileDetailSize * 0.5f;
+            DrawFanIcon(left + r, detailBase - kTileDetailSize * kCap / 2.0f, r, faint);
+            x += 2.0f * r + 5.0f;
+        }
+        auto detail = Wrapped(tile.detail, kTileDetailSize, DWRITE_FONT_WEIGHT_NORMAL, TileDetailWidth() - (x - left));
+        DrawText(detail.Get(), x, detailBase, faint);
     }
+}
+
+// A four-blade fan seen from the front: curved blades around a hub, drawn with ellipses so it stays crisp at
+// any size and in any color.
+void Card::DrawFanIcon(float cx, float cy, float radius, const D2D1_COLOR_F& color) {
+    brush_->SetColor(color);
+    D2D1_MATRIX_3X2_F saved;
+    target_->GetTransform(&saved);
+    for (int blade = 0; blade < 4; ++blade) {
+        const float angle = 22.0f + 90.0f * static_cast<float>(blade);
+        target_->SetTransform(D2D1::Matrix3x2F::Rotation(angle, D2D1::Point2F(cx, cy)) * saved);
+        target_->FillEllipse(
+            D2D1::Ellipse(D2D1::Point2F(cx + radius * 0.48f, cy - radius * 0.12f), radius * 0.50f, radius * 0.26f),
+            brush_.Get());
+    }
+    target_->SetTransform(saved);
+    // Hub: a ring in the tile's color with the fan's color inside, so the blades read as separate.
+    brush_->SetColor(Ink(theme_, theme_.light ? 0.035f : 0.045f));
+    target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), radius * 0.30f, radius * 0.30f), brush_.Get());
+    brush_->SetColor(color);
+    target_->FillEllipse(D2D1::Ellipse(D2D1::Point2F(cx, cy), radius * 0.18f, radius * 0.18f), brush_.Get());
+}
+
+void Card::DrawFanTile(const CardFanLine& fan, const D2D1_RECT_F& area) {
+    const bool light = theme_.light;
+    const D2D1_COLOR_F strong = Ink(theme_, light ? 0.90f : 0.96f);
+    const D2D1_COLOR_F medium = Ink(theme_, light ? 0.62f : 0.66f);
+    const D2D1_COLOR_F faint = Ink(theme_, 0.46f);
+    brush_->SetColor(Ink(theme_, light ? 0.035f : 0.045f));
+    target_->FillRoundedRectangle(D2D1::RoundedRect(area, kTileRadius, kTileRadius), brush_.Get());
+    if (theme_.highContrast) {
+        brush_->SetColor(FromColorRef(theme_.hcText));
+        target_->DrawRoundedRectangle(D2D1::RoundedRect(area, kTileRadius, kTileRadius), brush_.Get(), 1.0f / scale_);
+    }
+    const float left = area.left + kTilePad, right = area.right - kTilePad;
+    const float cy = (area.top + area.bottom) / 2.0f;
+    const float base = cy + kTileTitleSize * kCap / 2.0f;
+    DrawFanIcon(left + kFanIconSize / 2.0f, cy, kFanIconSize / 2.0f, medium);
+    DrawText(Text(fan.title, kTileTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD).Get(), left + kFanIconSize + 7.0f, base,
+             medium);
+    // Speed in front, how hard it is driven after it, quieter.
+    float x = right;
+    if (!fan.percent.empty()) {
+        auto percent = Text(fan.percent, kTileTitleSize, DWRITE_FONT_WEIGHT_NORMAL);
+        DrawTextRight(percent.Get(), x, base, faint);
+        if (percent) x -= TextWidth(percent.Get()) + 8.0f;
+    }
+    DrawTextRight(Text(fan.speed, kTileTitleSize, DWRITE_FONT_WEIGHT_SEMI_BOLD).Get(), x, base, strong);
 }
 
 namespace {
@@ -755,8 +827,20 @@ bool Card::Paint(const CardModel& model) {
             }
             y += tileH + (r + 1 < rows ? kTileGap : 0.0f);
         }
+        // Fans of their own: compact lines, two (or three) per row.
+        const size_t fanRows = TileRows(model.fans.size(), tileColumns_);
+        if (fanRows && rows) y += kTileGap;
+        for (size_t r = 0; r < fanRows; ++r) {
+            for (size_t c = 0; c < columns; ++c) {
+                const size_t i = r * columns + c;
+                if (i >= model.fans.size()) break;
+                const float x = left + static_cast<float>(c) * (tileW + kTileGap);
+                DrawFanTile(model.fans[i], D2D1::RectF(Snap(x), Snap(y), Snap(x + tileW), Snap(y + kFanLineHeight)));
+            }
+            y += kFanLineHeight + (r + 1 < fanRows ? kTileGap : 0.0f);
+        }
         if (!model.sensorsHint.empty()) {
-            if (rows) y += 6.0f;
+            if (rows || fanRows) y += 6.0f;
             DrawText(Text(model.sensorsHint, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL).Get(), left, y + kHintLine - 5.0f,
                      faint);
             y += kHintLine;

@@ -30,6 +30,17 @@ void GpuSensors::Open(const std::vector<LUID>& adapters) {
         open.AdapterLuid = luid;
         if (D3DKMTOpenAdapterFromLuid(&open) == 0) {
             adapter.handle = open.hAdapter;
+            // The fan's top speed, to express the current one as a percentage.
+            D3DKMT_ADAPTER_PERFDATACAPS caps{};
+            caps.PhysicalAdapterIndex = 0;
+            D3DKMT_QUERYADAPTERINFO query{};
+            query.hAdapter = adapter.handle;
+            query.Type = KMTQAITYPE_ADAPTERPERFDATA_CAPS;
+            query.pPrivateDriverData = &caps;
+            query.PrivateDriverDataSize = sizeof(caps);
+            if (D3DKMTQueryAdapterInfo(&query) == 0 && caps.MaxFanRPM > 0 && caps.MaxFanRPM < 30000) {
+                adapter.maxFanRpm = caps.MaxFanRPM;
+            }
         } else {
             adapter.supported = false;
         }
@@ -66,7 +77,10 @@ GpuReading GpuSensors::Read(size_t index) {
     }
     // Temperature is reported in deci-degrees Celsius; 0 means "not reported".
     if (perf.Temperature > 0 && perf.Temperature < 1500) reading.temperature = perf.Temperature / 10.0;
-    if (perf.FanRPM > 0 && perf.FanRPM < 20000) reading.fanRpm = static_cast<double>(perf.FanRPM);
+    if (perf.FanRPM > 0 && perf.FanRPM < 20000) {
+        reading.fanRpm = static_cast<double>(perf.FanRPM);
+        if (adapter.maxFanRpm) reading.fanPercent = std::min(100.0, 100.0 * perf.FanRPM / adapter.maxFanRpm);
+    }
     return reading;
 }
 

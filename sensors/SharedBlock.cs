@@ -18,13 +18,14 @@ namespace SysBar.Sensors
 
     internal readonly struct Reading
     {
-        public Reading(Kind kind, Group group, string name, float value, Role role = Role.Unknown)
+        public Reading(Kind kind, Group group, string name, float value, Role role = Role.Unknown, float duty = float.NaN)
         {
             Kind = kind;
             Group = group;
             Name = name;
             Value = value;
             Role = role;
+            Duty = duty;
         }
 
         public Kind Kind { get; }
@@ -32,6 +33,9 @@ namespace SysBar.Sensors
         public string Name { get; }
         public float Value { get; }
         public Role Role { get; }
+
+        /// <summary>Fans: how hard the fan is driven, 0..100 % (PWM duty); NaN when unknown.</summary>
+        public float Duty { get; }
     }
 
     /// <summary>
@@ -41,7 +45,8 @@ namespace SysBar.Sensors
     ///  0 uint32 magic 'SBS1'     4 uint32 version (1)    8 uint32 sequence (odd while writing)
     /// 12 uint32 count           16 int64 updated (FILETIME, UTC)
     /// 24 float  cpuTemperature (NaN = unknown)           28 uint32 service version (major&lt;&lt;20|minor&lt;&lt;10|patch)
-    /// 32 entries[64] x 128 bytes: kind u8, group u8, role u8 (fans), reserved u8, value f32, name wchar[60]
+    /// 32 entries[64] x 128 bytes: kind u8, group u8, role u8 (fans), duty u8 (fans: percent + 1, 0 = unknown),
+    ///    value f32, name wchar[60]
     /// </code>
     /// Clients ask for fresh data by setting the "wanted" event; when nobody asks, the service idles.
     /// </summary>
@@ -139,7 +144,7 @@ namespace SysBar.Sensors
                 _view.Write(at, (byte)r.Kind);
                 _view.Write(at + 1, (byte)r.Group);
                 _view.Write(at + 2, (byte)r.Role);
-                _view.Write(at + 3, (byte)0);
+                _view.Write(at + 3, float.IsNaN(r.Duty) ? (byte)0 : (byte)(Math.Round(Math.Max(0f, Math.Min(100f, r.Duty))) + 1));
                 _view.Write(at + 4, r.Value);
                 string name = r.Name.Length > NameChars - 1 ? r.Name.Substring(0, NameChars - 1) : r.Name;
                 for (int c = 0; c < NameChars; c++)

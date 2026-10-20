@@ -386,6 +386,7 @@ void MetricsSampler::CollectGpu(MetricsSnapshot& out, bool collected) {
         const hw::GpuReading main = gpuSensors_.Read(0);
         out.gpuTemperature = main.temperature;
         out.gpuFanRpm = main.fanRpm;
+        out.gpuFanPercent = main.fanPercent;
     }
 
     if (adapters_.empty() || !collected) return keepLast();
@@ -568,17 +569,21 @@ void MetricsSampler::CollectSensors(MetricsSnapshot& out) {
         out.sensors.push_back({SensorKind::Temperature, SensorGroup::Cpu, L"CPU", *out.cpuTemperature});
     }
     for (size_t i = 0; i < adapters_.size(); ++i) {
-        const hw::GpuReading reading = i == 0 ? hw::GpuReading{out.gpuTemperature, out.gpuFanRpm} : gpuSensors_.Read(i);
+        const hw::GpuReading reading =
+            i == 0 ? hw::GpuReading{out.gpuTemperature, out.gpuFanRpm, out.gpuFanPercent} : gpuSensors_.Read(i);
         if (reading.temperature) {
             out.sensors.push_back({SensorKind::Temperature, SensorGroup::Gpu, adapters_[i].name, *reading.temperature});
         }
         // The service tells a stopped fan (0 RPM) from a missing one, which D3DKMT cannot: prefer it.
-        std::optional<double> fan = reading.fanRpm;
+        std::optional<double> fan = reading.fanRpm, duty = reading.fanPercent;
         for (const SensorReading& f : gpuFans) {
-            if (SameDrive(f.name, adapters_[i].name) || (adapters_.size() == 1 && gpuFans.size() == 1)) fan = f.value;
+            if (SameDrive(f.name, adapters_[i].name) || (adapters_.size() == 1 && gpuFans.size() == 1)) {
+                fan = f.value;
+                if (f.duty) duty = f.duty;
+            }
         }
         if (fan) {
-            out.sensors.push_back({SensorKind::Fan, SensorGroup::Gpu, adapters_[i].name, *fan, FanRole::Gpu});
+            out.sensors.push_back({SensorKind::Fan, SensorGroup::Gpu, adapters_[i].name, *fan, FanRole::Gpu, duty});
         }
     }
     for (SensorReading& f : fans) out.sensors.push_back(std::move(f));

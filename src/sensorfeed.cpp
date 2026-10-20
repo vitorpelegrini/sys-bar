@@ -51,6 +51,7 @@ bool Decode(const uint8_t* block, size_t size, int64_t nowFileTime, Decoded& out
         const uint8_t kind = e[0];
         const uint8_t group = e[1];
         const uint8_t role = e[2];
+        const uint8_t duty = e[3];  // percent + 1; 0 = unknown (and what older services wrote)
         const float value = Get<float>(e, 4);
         if (kind > 1 || group > 3 || !std::isfinite(value)) continue;
         const bool fan = kind == 1;
@@ -70,6 +71,7 @@ bool Decode(const uint8_t* block, size_t size, int64_t nowFileTime, Decoded& out
         reading.value = value;
         reading.role =
             fan && role <= static_cast<uint8_t>(FanRole::Psu) ? static_cast<FanRole>(role) : FanRole::Unknown;
+        if (fan && duty >= 1 && duty <= 101) reading.duty = duty - 1.0;
         out.readings.push_back(std::move(reading));
     }
     return true;

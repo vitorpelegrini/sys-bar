@@ -173,8 +173,14 @@ CardModel DemoCard(i18n::Lang lang) {
         {L"GPU", L"88 °C", rpm(L"1460"), 0.85f, 1, MetricId::Gpu, false},
         {L"NVMe C:", L"41 °C", L"Samsung SSD 980 PRO 1TB", 0.35f, 0, MetricId::Disk, false},
         {L"SSD D:", L"72 °C", L"TGT-SLST-120", 0.87f, 2, MetricId::Disk, false},
-        {S(Str::CardFanCase), rpm(L"1205"), L"Fan #1", -1.0f, 0, MetricId::Cpu, true},
     };
+    model.sensors[0].detail = rpm(L"2591") + L" · 45%";
+    model.sensors[0].fanDetail = true;
+    model.sensors[1].detail = rpm(L"1460") + L" · 38%";
+    model.sensors[1].fanDetail = true;
+    model.fans = {{S(Str::CardFanCase), rpm(L"1842"), L"62%"},
+                  {S(Str::CardFanPump), rpm(L"2400"), L"80%"},
+                  {S(Str::CardFanCase), S(Str::CardFanStopped), L""}};
     return model;
 }
 

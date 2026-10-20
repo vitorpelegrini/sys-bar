@@ -34,6 +34,14 @@ struct CardSensorLine {
     float warmAt = 0.8f;          // gauge positions where the device turns warm / hot (thermometer marks)
     float hotAt = 0.92f;
     float tickStep = 0.125f;  // gauge distance between the scale's marks (10 °C)
+    bool fanDetail = false;   // the detail lists this device's fans: drawn after a fan icon
+};
+
+// A fan of its own (case, pump, power supply...): one compact line with a fan icon.
+struct CardFanLine {
+    std::wstring title;    // "Case fan"
+    std::wstring speed;    // "1842 RPM" / "stopped"
+    std::wstring percent;  // how hard it is driven, "62%"; empty when unknown
 };
 
 struct CardModel {
@@ -46,8 +54,9 @@ struct CardModel {
     std::vector<CardRow> rows;
     std::wstring sensorsTitle;  // empty = no sensors section
     std::vector<CardSensorLine> sensors;
-    std::wstring sensorsHint;  // faint line under the sensors (e.g. how to get more of them)
-    std::wstring notice;       // highlighted line above the footer (e.g. an available update)
+    std::vector<CardFanLine> fans;  // after the sensor tiles, two per line
+    std::wstring sensorsHint;       // faint line under the sensors (e.g. how to get more of them)
+    std::wstring notice;            // highlighted line above the footer (e.g. an available update)
 };
 
 // Details panel shown on hover: values, hardware model and a history graph per metric.
@@ -82,6 +91,8 @@ private:
     void DrawSparkline(const CardRow& row, int capacity, const D2D1_RECT_F& area);
     void DrawSensorTile(const CardSensorLine& tile, const D2D1_RECT_F& area);
     void DrawThermometer(const CardSensorLine& tile, float left, float right, float top);
+    void DrawFanTile(const CardFanLine& fan, const D2D1_RECT_F& area);
+    void DrawFanIcon(float cx, float cy, float radius, const D2D1_COLOR_F& color);
     // Text that never gets an ellipsis: it wraps within `maxWidth`; `extra` = height beyond one line.
     ComPtr<IDWriteTextLayout> Wrapped(const std::wstring& text, float size, DWRITE_FONT_WEIGHT weight, float maxWidth,
                                       float* extra = nullptr);

@@ -41,6 +41,7 @@ struct SensorReading {
     std::wstring name;   // "CPU", GPU adapter name, "Fan #2", SATA drive model
     double value = 0.0;  // °C or RPM (a fan at 0 RPM is stopped)
     FanRole role = FanRole::Unknown;
+    std::optional<double> duty;  // fans: how hard it is driven, 0..100 %
 };
 
 struct MetricsSnapshot {
@@ -69,6 +70,7 @@ struct MetricsSnapshot {
     std::optional<double> cpuTemperature;  // °C (advanced sensors)
     std::optional<double> gpuTemperature;  // °C, main GPU
     std::optional<double> gpuFanRpm;
+    std::optional<double> gpuFanPercent;
     std::vector<SensorReading> sensors;  // CPU, GPUs, fans and service-only drives (disks have their own)
 };
 

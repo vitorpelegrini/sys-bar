@@ -18,6 +18,7 @@ namespace hw {
 struct GpuReading {
     std::optional<double> temperature;  // °C
     std::optional<double> fanRpm;
+    std::optional<double> fanPercent;  // speed relative to the fan's maximum (the driver reports it)
 };
 
 // Keeps kernel-mode adapter handles open (cheap) and queries D3DKMT adapter performance data.
@@ -36,6 +37,7 @@ private:
     struct Adapter {
         UINT handle = 0;
         bool supported = true;
+        ULONG maxFanRpm = 0;  // from the adapter's performance capabilities; 0 = unknown
     };
     std::vector<Adapter> adapters_;
 };

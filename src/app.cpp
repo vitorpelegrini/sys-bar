@@ -1083,6 +1083,14 @@ CardModel App::BuildCardModel() const {
         if (value < 1.0) return std::wstring(S(i18n::Str::CardFanStopped));  // zero-RPM mode at idle
         return text::Format(S(i18n::Str::CardRpm), {std::to_wstring(static_cast<int>(std::lround(value)))});
     };
+    auto dutyText = [&](const std::optional<double>& duty) {
+        return duty ? text::Format(S(i18n::Str::PercentFormat), {text::Percent(*duty)}) : std::wstring();
+    };
+    // "2586 RPM · 45%": the speed, and how hard the fan is driven when known.
+    auto fanText = [&](const SensorReading& r) {
+        const std::wstring percent = r.value >= 1.0 ? dutyText(r.duty) : std::wstring();
+        return percent.empty() ? rpm(r.value) : rpm(r.value) + L" \u00b7 " + percent;
+    };
     auto join = [](std::wstring& into, const std::wstring& part) { into += (into.empty() ? L"" : L" · ") + part; };
     auto temperatureTile = [&](MetricId id, std::wstring title, double celsius) {
         CardSensorLine tile;
@@ -1103,7 +1111,8 @@ CardModel App::BuildCardModel() const {
     for (const SensorReading& r : s.sensors) {
         if (r.kind != SensorKind::Fan || r.group == SensorGroup::Gpu || roleOf(r) != FanRole::Cpu) continue;
         if (!cpuTile) cpuTile = CardSensorLine{L"CPU", L"", L"", -1.0f, 0, MetricId::Cpu, false};
-        join(cpuTile->detail, rpm(r.value));
+        join(cpuTile->detail, fanText(r));
+        cpuTile->fanDetail = true;
     }
     if (cpuTile) model.sensors.push_back(std::move(*cpuTile));
 
@@ -1120,8 +1129,10 @@ CardModel App::BuildCardModel() const {
         // (same name) never get each other's fan.
         if (i + 1 < s.sensors.size()) {
             const SensorReading& f = s.sensors[i + 1];
-            if (f.group == SensorGroup::Gpu && f.kind == SensorKind::Fan && f.name == r.name)
-                join(tile.detail, rpm(f.value));
+            if (f.group == SensorGroup::Gpu && f.kind == SensorKind::Fan && f.name == r.name) {
+                join(tile.detail, fanText(f));
+                tile.fanDetail = true;
+            }
         }
         if (tile.detail.empty()) tile.detail = r.name;
         model.sensors.push_back(std::move(tile));
@@ -1146,18 +1157,18 @@ CardModel App::BuildCardModel() const {
     for (const SensorReading& r : s.sensors) {
         const FanRole role = roleOf(r);
         if (r.kind != SensorKind::Fan || r.group == SensorGroup::Gpu || role == FanRole::Cpu) continue;
-        CardSensorLine tile;
-        tile.fan = true;
-        tile.id = MetricId::Cpu;
-        tile.value = rpm(r.value);
-        tile.title = FanRoleName(role, r.name);
-        if (role != FanRole::Unknown) tile.detail = r.name;  // "Fan #1": which header it is
-        model.sensors.push_back(std::move(tile));
+        CardFanLine fan;
+        fan.title = FanRoleName(role, r.name);
+        fan.speed = rpm(r.value);
+        if (r.value >= 1.0) fan.percent = dutyText(r.duty);
+        model.fans.push_back(std::move(fan));
     }
     if (!s.advancedSensors && !SensorsTool().empty()) {
         model.sensorsHint = text::Chip(icon::kThermometer, S(i18n::Str::CardSensorsHint));
     }
-    if (!model.sensors.empty() || !model.sensorsHint.empty()) model.sensorsTitle = S(i18n::Str::CardSensors);
+    if (!model.sensors.empty() || !model.fans.empty() || !model.sensorsHint.empty()) {
+        model.sensorsTitle = S(i18n::Str::CardSensors);
+    }
 
     // Notice: a short-lived message the user asked for (e.g. advanced sensors turned on).
     if (!notice_.empty() && GetTickCount64() < noticeUntil_) model.notice = notice_;

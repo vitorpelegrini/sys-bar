@@ -38,7 +38,7 @@ namespace SysBar.Sensors
         public (float cpuTemperature, List<Reading> readings) Read()
         {
             var readings = new List<Reading>();
-            var boardFans = new List<(IHardware item, string name, float rpm)>();
+            var boardFans = new List<(IHardware item, string name, float rpm, float duty)>();
             float cpu = float.NaN;
             TimeSpan now = _clock.Elapsed;
             bool refreshStorage = now - _lastStorageUpdate >= StorageInterval;
@@ -73,9 +73,10 @@ namespace SysBar.Sensors
                 {
                     // A GPU fan at 0 RPM is a stopped fan (zero-RPM mode at idle), worth showing as such.
                     ISensor? fan = hardware.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Fan);
+                    ISensor? control = hardware.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Control);
                     if (fan?.Value is float gpuRpm && gpuRpm >= 0f && gpuRpm < 20000f)
                     {
-                        readings.Add(new Reading(Kind.Fan, Group.Gpu, hardware.Name, gpuRpm, Role.Gpu));
+                        readings.Add(new Reading(Kind.Fan, Group.Gpu, hardware.Name, gpuRpm, Role.Gpu, Duty(control)));
                     }
                     continue;
                 }
@@ -86,7 +87,9 @@ namespace SysBar.Sensors
                     {
                         if (sensor.SensorType == SensorType.Fan && sensor.Value is float rpm && rpm >= 1f && rpm < 20000f)
                         {
-                            boardFans.Add((item, sensor.Name, rpm));
+                            // The header's PWM control has the same index as its tachometer on Super I/O chips.
+                            ISensor? control = item.Sensors.FirstOrDefault(s => s.SensorType == SensorType.Control && s.Index == sensor.Index);
+                            boardFans.Add((item, sensor.Name, rpm, Duty(control)));
                         }
                     }
                 }
@@ -96,15 +99,18 @@ namespace SysBar.Sensors
             // the only fan spinning on it (a desktop always has its CPU fan connected).
             IHardware? mainChip = boardFans.Select(f => f.item).FirstOrDefault(h => h.HardwareType == HardwareType.SuperIO);
             int mainChipFans = boardFans.Count(f => f.item == mainChip);
-            foreach (var (item, name, rpm) in boardFans)
+            foreach (var (item, name, rpm, duty) in boardFans)
             {
                 Role role = item.HardwareType == HardwareType.Psu ? Role.Psu : FanRoles.FromName(name);
                 if (role == Role.Unknown && item == mainChip) role = FanRoles.FromChip(item.Name, name, mainChipFans);
-                readings.Add(new Reading(Kind.Fan, Group.Board, name, rpm, role));
+                readings.Add(new Reading(Kind.Fan, Group.Board, name, rpm, role, duty));
             }
             if (!float.IsNaN(cpu)) readings.Insert(0, new Reading(Kind.Temperature, Group.Cpu, "CPU", cpu));
             return (cpu, readings);
         }
+
+        private static float Duty(ISensor? control) =>
+            control?.Value is float v && v >= 0f && v <= 100f ? v : float.NaN;
 
         private static bool IsGpu(HardwareType type) =>
             type == HardwareType.GpuAmd || type == HardwareType.GpuNvidia || type == HardwareType.GpuIntel;

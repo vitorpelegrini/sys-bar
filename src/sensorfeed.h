@@ -12,8 +12,8 @@
 // publishes CPU temperature, fans and SATA drive temperatures in a read-only shared-memory block.
 namespace feed {
 
-// Layout v1 - must match sensors/SharedBlock.cs. Entry byte 2 is the fan role (0 = unknown, as older
-// services wrote it).
+// Layout v1 - must match sensors/SharedBlock.cs. Entry byte 2 is the fan role and byte 3 the fan's duty
+// (percent + 1); 0 means unknown in both, which is what older services wrote.
 constexpr uint32_t kMagic = 0x31534253;  // "SBS1"
 constexpr uint32_t kVersion = 1;
 constexpr size_t kHeaderSize = 32;
