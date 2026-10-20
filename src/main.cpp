@@ -28,7 +28,7 @@ int QuitRunningInstance() {
 
 }  // namespace
 
-int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR commandLine, int) {
+int WINAPI wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE, _In_ PWSTR commandLine, _In_ int) {
     // DPI awareness (Per-Monitor V2) comes from the manifest.
     int argc = 0;
     if (LPWSTR* argv = CommandLineToArgvW(commandLine, &argc)) {

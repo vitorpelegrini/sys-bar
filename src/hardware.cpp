@@ -52,7 +52,7 @@ void GpuSensors::Close() {
     for (const Adapter& adapter : adapters_) {
         if (adapter.handle) {
             D3DKMT_CLOSEADAPTER close{adapter.handle};
-            D3DKMTCloseAdapter(&close);
+            (void)D3DKMTCloseAdapter(&close);  // nothing to do if closing fails
         }
     }
     adapters_.clear();
