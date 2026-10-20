@@ -1,5 +1,7 @@
 #include "test.h"
 
+#include "icons.h"
+
 #include "card.h"
 #include "format.h"
 #include "i18n.h"
@@ -122,9 +124,10 @@ CardModel DemoCard(i18n::Lang lang) {
 
     CardModel model;
     model.title = S(Str::CardTitle);
-    model.window = text::HistoryWindow(60, 1000, S(Str::CardLastSeconds), S(Str::CardLastMinutes));
-    model.hintLeft = S(Str::CardHintClick);
-    model.hintRight = S(Str::CardHintMenu);
+    model.window =
+        text::Chip(icon::kClock, text::HistoryWindow(60, 1000, S(Str::CardLastSeconds), S(Str::CardLastMinutes)));
+    model.hintLeft = text::Chip(icon::kTaskManager, S(Str::CardHintClick));
+    model.hintRight = text::Chip(icon::kOptions, S(Str::CardHintMenu));
     auto row = [&](MetricId id, std::wstring title, std::wstring value, std::wstring sub, std::wstring peak, float base,
                    float amp, float freq) {
         CardRow r;
@@ -132,7 +135,7 @@ CardModel DemoCard(i18n::Lang lang) {
         r.title = std::move(title);
         r.value = std::move(value);
         r.subtitle = std::move(sub);
-        r.peak = text::Format(S(Str::CardPeak), {peak});
+        r.peak = text::Chip(icon::kPeak, text::Format(S(Str::CardPeak), {peak}));
         for (int i = 0; i < 60; ++i) {
             const float x = static_cast<float>(i);
             r.history.push_back(
@@ -142,20 +145,28 @@ CardModel DemoCard(i18n::Lang lang) {
         model.rows.push_back(r);
     };
     row(MetricId::Cpu, S(Str::CardCpu), pct(L"23"),
-        L"Intel Xeon E5-2699 v3 · " + text::Format(S(Str::CardThreads), {L"36"}), pct(L"61"), 0.25f, 0.18f, 0.35f);
-    row(MetricId::Ram, S(Str::CardMemory), gb(L"18,2"), text::Format(S(Str::CardOfTotal), {gb(L"31,8"), pct(L"57")}),
+        text::JoinChips({text::Chip(icon::kChip, L"Intel Xeon E5-2699 v3"),
+                         text::Chip(icon::kThreads, text::Format(S(Str::CardThreads), {L"36"}))}),
+        pct(L"61"), 0.25f, 0.18f, 0.35f);
+    row(MetricId::Ram, S(Str::CardMemory), gb(L"18,2"),
+        text::IconParts(text::Format(S(Str::CardOfTotal), {gb(L"31,8"), pct(L"57")}), {icon::kMemory, icon::kUsage}),
         gb(L"19,0"), 0.57f, 0.02f, 0.1f);
-    row(MetricId::Gpu, S(Str::CardGpu), pct(L"94"), L"AMD Radeon RX 6700 XT", pct(L"99"), 0.75f, 0.2f, 0.25f);
-    row(MetricId::Vram, S(Str::CardGpuMemory), gb(L"2,6"), text::Format(S(Str::CardOfTotal), {gb(L"12,0"), pct(L"21")}),
+    row(MetricId::Gpu, S(Str::CardGpu), pct(L"94"), text::Chip(icon::kDisplay, L"AMD Radeon RX 6700 XT"), pct(L"99"),
+        0.75f, 0.2f, 0.25f);
+    row(MetricId::Vram, S(Str::CardGpuMemory), gb(L"2,6"),
+        text::IconParts(text::Format(S(Str::CardOfTotal), {gb(L"12,0"), pct(L"21")}), {icon::kMemory, icon::kUsage}),
         gb(L"3,1"), 0.22f, 0.03f, 0.2f);
     const std::wstring mbps = S(Str::UnitMBps);
     row(MetricId::Net, S(Str::CardNetwork), L"4,6 " + mbps,
-        text::Format(S(Str::CardNetIo), {L"4,2 " + mbps, L"412 " + std::wstring(S(Str::UnitKBps))}) +
-            L" · Ethernet · 1 Gbps",
+        text::JoinChips({text::IconParts(text::Format(S(Str::CardNetIo),
+                                                      {L"4,2 " + mbps, L"412 " + std::wstring(S(Str::UnitKBps))}),
+                                         {icon::kDown, icon::kUp}),
+                         text::Chip(icon::kEthernet, L"Ethernet · 1 Gbps")}),
         L"38 " + mbps, 0.3f, 0.25f, 0.45f);
     model.rows.back().neutral = true;
     row(MetricId::Disk, S(Str::CardDisk), pct(L"7"),
-        text::Format(S(Str::CardDiskIo), {L"12,4 " + mbps, L"0,8 " + mbps}), pct(L"64"), 0.05f, 0.08f, 0.6f);
+        text::IconParts(text::Format(S(Str::CardDiskIo), {L"12,4 " + mbps, L"0,8 " + mbps}), {icon::kDown, icon::kUp}),
+        pct(L"64"), 0.05f, 0.08f, 0.6f);
     model.sensorsTitle = S(Str::CardSensors);
     const auto rpm = [&](const wchar_t* v) { return text::Format(S(Str::CardRpm), {v}); };
     model.sensors = {
@@ -165,11 +176,17 @@ CardModel DemoCard(i18n::Lang lang) {
         {L"SSD D:", L"72 °C", L"TGT-SLST-120", 0.87f, 2, MetricId::Disk, false},
         {S(Str::CardFanCase), rpm(L"1205"), L"Fan #1", -1.0f, 0, MetricId::Cpu, true},
     };
-    model.notice = text::Format(S(Str::CardUpdateAvailable), {L"1.1.0"});
+    model.notice = text::Chip(icon::kUpdate, text::Format(S(Str::CardUpdateAvailable), {L"1.1.0"}));
     return model;
 }
 
 }  // namespace
+
+namespace t {
+void SaveProbe(const Surface& s, const std::wstring& name) {
+    SavePreview(s, name, 0x1A1A1A);
+}
+}  // namespace t
 
 TEST(Layout_width_never_depends_on_the_values) {
     // Zero jitter: the width depends only on the widest possible text, never on the current one.

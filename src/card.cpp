@@ -1,5 +1,7 @@
 #include "card.h"
 
+#include "icons.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -123,6 +125,21 @@ ComPtr<IDWriteTextLayout> Card::Text(const std::wstring& text, float size, DWRIT
         return nullptr;
     }
     gfx_.UseTabularFigures(layout.Get(), static_cast<UINT32>(text.size()));
+    // Inline icons: Private Use Area characters drawn with Segoe MDL2 Assets, slightly smaller.
+    for (UINT32 i = 0; i < text.size();) {
+        if (!icon::IsIcon(text[i])) {
+            ++i;
+            continue;
+        }
+        UINT32 end = i + 1;
+        while (end < text.size() && icon::IsIcon(text[end])) ++end;
+        const DWRITE_TEXT_RANGE range{i, end - i};
+        layout->SetFontFamilyName(L"Segoe MDL2 Assets", range);
+        layout->SetFontSize(size * 0.92f, range);
+        layout->SetFontWeight(DWRITE_FONT_WEIGHT_NORMAL, range);
+        if (iconBrush_) layout->SetDrawingEffect(iconBrush_.Get(), range);
+        i = end;
+    }
     return layout;
 }
 
@@ -194,7 +211,7 @@ SIZE Card::Measure(UINT dpi, const CardModel& model, int maxHeightPx) {
                 if (half) {
                     box.subtitle = row.peak.empty()       ? row.subtitle
                                    : row.subtitle.empty() ? row.peak
-                                                          : row.subtitle + L" \u00b7 " + row.peak;
+                                                          : row.subtitle + L"\u2003" + row.peak;
                     box.subWidth = box.w - kIndent;
                 } else {
                     box.subtitle = row.subtitle;
@@ -284,8 +301,11 @@ bool Card::EnsureTarget() {
     if (target_) return true;
     target_ = CreateDcTarget(gfx_.d2d());
     if (!target_) return false;
-    if (FAILED(target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 1), &brush_))) {
+    if (FAILED(target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 1), &brush_)) ||
+        FAILED(target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 1), &iconBrush_))) {
         target_.Reset();
+        brush_.Reset();
+        iconBrush_.Reset();
         return false;
     }
     if (!roundStroke_) {
@@ -296,15 +316,18 @@ bool Card::EnsureTarget() {
     return true;
 }
 
-void Card::DrawText(IDWriteTextLayout* layout, float x, float baseline, const D2D1_COLOR_F& color) {
+void Card::DrawText(IDWriteTextLayout* layout, float x, float baseline, const D2D1_COLOR_F& color,
+                    const D2D1_COLOR_F* iconColor) {
     if (!layout) return;
     brush_->SetColor(color);
+    if (iconBrush_) iconBrush_->SetColor(iconColor ? *iconColor : color);
     target_->DrawTextLayout(D2D1::Point2F(Snap(x), Snap(baseline) - TextBaseline(layout)), layout, brush_.Get());
 }
 
-void Card::DrawTextRight(IDWriteTextLayout* layout, float right, float baseline, const D2D1_COLOR_F& color) {
+void Card::DrawTextRight(IDWriteTextLayout* layout, float right, float baseline, const D2D1_COLOR_F& color,
+                         const D2D1_COLOR_F* iconColor) {
     if (!layout) return;
-    DrawText(layout, right - TextWidth(layout), baseline, color);
+    DrawText(layout, right - TextWidth(layout), baseline, color, iconColor);
 }
 
 void Card::DrawSparkline(const CardRow& row, int capacity, const D2D1_RECT_F& area) {
@@ -523,9 +546,14 @@ bool Card::Paint(const CardModel& model) {
         DrawTextRight(Text(row.value, valueSize, DWRITE_FONT_WEIGHT_SEMI_BOLD).Get(), x1, valueBase, valueColor);
 
         // Subtitle (wrapped, never cut); full rows show the peak on the right of its first line.
+        // Icons in the metric's own color, a little softer than the marker.
+        const D2D1_COLOR_F iconColor =
+            theme_.highContrast ? medium : WithAlpha(MetricColor(row.id, 0.0f, theme_), 0.85f);
         auto sub = Wrapped(box.subtitle, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL, box.subWidth);
-        DrawText(sub.Get(), x0 + kIndent, subBase, medium);
-        if (!line.half) DrawTextRight(Text(row.peak, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL).Get(), x1, subBase, faint);
+        DrawText(sub.Get(), x0 + kIndent, subBase, medium, &iconColor);
+        if (!line.half) {
+            DrawTextRight(Text(row.peak, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL).Get(), x1, subBase, faint, &iconColor);
+        }
 
         DrawSparkline(row, model.capacity, D2D1::RectF(x0, Snap(sparkTop), x1, Snap(sparkTop + sparkHeight_)));
     }
@@ -589,6 +617,7 @@ bool Card::Paint(const CardModel& model) {
     if (hr == D2DERR_RECREATE_TARGET) {
         target_.Reset();
         brush_.Reset();
+        iconBrush_.Reset();
         return false;
     }
     return SUCCEEDED(hr);

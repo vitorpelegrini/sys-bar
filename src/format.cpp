@@ -148,6 +148,49 @@ std::wstring Watts(double watts, wchar_t decimal) {
     return (watts > 0.0 ? L"+" : L"\u2212") + number + L" W";
 }
 
+std::wstring Chip(wchar_t icon, std::wstring_view text) {
+    std::wstring out;
+    if (icon) {
+        out += icon;
+        out += L'\u00a0';
+    }
+    out += text;
+    return out;
+}
+
+std::wstring JoinChips(std::initializer_list<std::wstring_view> chips) {
+    std::wstring out;
+    for (std::wstring_view chip : chips) {
+        if (chip.empty()) continue;
+        if (!out.empty()) out += L'\u2003';
+        out += chip;
+    }
+    return out;
+}
+
+std::vector<std::wstring> SplitParts(std::wstring_view text) {
+    std::vector<std::wstring> parts;
+    constexpr std::wstring_view kSeparator = L" \u00b7 ";
+    size_t start = 0;
+    for (;;) {
+        const size_t at = text.find(kSeparator, start);
+        parts.emplace_back(
+            Trim(text.substr(start, at == std::wstring_view::npos ? std::wstring_view::npos : at - start)));
+        if (at == std::wstring_view::npos) break;
+        start = at + kSeparator.size();
+    }
+    return parts;
+}
+
+std::wstring IconParts(const std::wstring& text, std::initializer_list<wchar_t> icons) {
+    const std::vector<std::wstring> parts = SplitParts(text);
+    if (parts.size() != icons.size()) return text;
+    std::wstring out;
+    auto glyph = icons.begin();
+    for (const std::wstring& part : parts) out = JoinChips({out, Chip(*glyph++, part)});
+    return out;
+}
+
 std::wstring FirstDriveLetter(std::wstring_view letters) {
     std::wstring best;
     for (size_t i = 0; i + 1 < letters.size(); ++i) {

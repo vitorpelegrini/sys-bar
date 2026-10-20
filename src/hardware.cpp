@@ -203,6 +203,7 @@ std::vector<NetInterface> ReadNetInterfaces() {
         item.inOctets = row.InOctets;
         item.outOctets = row.OutOctets;
         item.linkBps = std::max(row.ReceiveLinkSpeed, row.TransmitLinkSpeed);
+        item.wireless = row.Type == IF_TYPE_IEEE80211;
         out.push_back(std::move(item));
     }
     FreeMibTable(table);
@@ -212,6 +213,7 @@ std::vector<NetInterface> ReadNetInterfaces() {
 NetRates NetworkMeter::Update(const std::vector<NetInterface>& now, ULONGLONG tickMs) {
     NetRates rates;
     rates.available = !now.empty();
+    rates.wireless = !now.empty();
     const double seconds = lastTick_ && tickMs > lastTick_ ? static_cast<double>(tickMs - lastTick_) / 1000.0 : 0.0;
     double down = 0.0, up = 0.0;
     std::unordered_map<uint64_t, NetInterface> next;
@@ -223,6 +225,7 @@ NetRates NetworkMeter::Update(const std::vector<NetInterface>& now, ULONGLONG ti
                 up += static_cast<double>(item.outOctets - it->second.outOctets);
         }
         rates.linkBps = std::max(rates.linkBps, item.linkBps);
+        rates.wireless = rates.wireless && item.wireless;
         if (rates.names.find(item.name) == std::wstring::npos) {
             rates.names += (rates.names.empty() ? L"" : L" + ") + item.name;
         }

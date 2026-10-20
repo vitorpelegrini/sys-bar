@@ -86,6 +86,7 @@ struct NetInterface {
     std::wstring name;  // "Ethernet", "Wi-Fi"
     uint64_t inOctets = 0, outOctets = 0;
     uint64_t linkBps = 0;  // bits per second
+    bool wireless = false;
 };
 
 // Physical interfaces that are up: no loopback, tunnels, virtual switch ports or filter drivers, so
@@ -95,8 +96,9 @@ std::vector<NetInterface> ReadNetInterfaces();
 struct NetRates {
     bool available = false;  // at least one physical interface is up
     uint64_t downBps = 0, upBps = 0;
-    uint64_t linkBps = 0;  // fastest link, bits per second
-    std::wstring names;    // "Ethernet" / "Ethernet + Wi-Fi"
+    uint64_t linkBps = 0;   // fastest link, bits per second
+    std::wstring names;     // "Ethernet" / "Ethernet + Wi-Fi"
+    bool wireless = false;  // every active adapter is Wi-Fi
 };
 
 // Turns the cumulative interface counters into rates between two calls.

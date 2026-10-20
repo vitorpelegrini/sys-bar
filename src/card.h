@@ -67,8 +67,11 @@ public:
 private:
     bool EnsureTarget();
     ComPtr<IDWriteTextLayout> Text(const std::wstring& text, float size, DWRITE_FONT_WEIGHT weight);
-    void DrawText(IDWriteTextLayout* layout, float x, float baseline, const D2D1_COLOR_F& color);
-    void DrawTextRight(IDWriteTextLayout* layout, float right, float baseline, const D2D1_COLOR_F& color);
+    // `iconColor` colors the inline icons; by default they take the text color.
+    void DrawText(IDWriteTextLayout* layout, float x, float baseline, const D2D1_COLOR_F& color,
+                  const D2D1_COLOR_F* iconColor = nullptr);
+    void DrawTextRight(IDWriteTextLayout* layout, float right, float baseline, const D2D1_COLOR_F& color,
+                       const D2D1_COLOR_F* iconColor = nullptr);
     void DrawSparkline(const CardRow& row, int capacity, const D2D1_RECT_F& area);
     void DrawSensorTile(const CardSensorLine& tile, const D2D1_RECT_F& area);
     // Text that never gets an ellipsis: it wraps within `maxWidth`; `extra` = height beyond one line.
@@ -81,6 +84,7 @@ private:
     const Gfx& gfx_;
     ComPtr<ID2D1DCRenderTarget> target_;
     ComPtr<ID2D1SolidColorBrush> brush_;
+    ComPtr<ID2D1SolidColorBrush> iconBrush_;  // drawing effect of inline icons (see icons.h)
     ComPtr<ID2D1StrokeStyle> roundStroke_;
     std::map<std::pair<int, int>, ComPtr<IDWriteTextFormat>> formats_;  // (size x 10, weight) -> format
     Surface surface_;

@@ -60,6 +60,7 @@ if(SYSBAR_BUILD_TESTS)
     add_executable(sysbar-tests
         tests/test_main.cpp
         tests/fake_taskbar.cpp
+        tests/glyphs_probe.cpp
         tests/test_format.cpp
         tests/test_gpu.cpp
         tests/test_hardware.cpp

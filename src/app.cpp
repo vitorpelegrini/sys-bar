@@ -1,6 +1,7 @@
 #include "app.h"
 
 #include "format.h"
+#include "icons.h"
 #include "logic.h"
 #include "trayprobe.h"
 #include "version.h"
@@ -923,10 +924,12 @@ CardModel App::BuildCardModel() const {
 
     CardModel model;
     model.title = S(i18n::Str::CardTitle);
-    model.window = text::HistoryWindow(static_cast<unsigned>(kHistory), settings_.intervalMs,
-                                       S(i18n::Str::CardLastSeconds), S(i18n::Str::CardLastMinutes));
-    model.hintLeft = settings_.clickOpensTaskManager ? S(i18n::Str::CardHintClick) : L"";
-    model.hintRight = S(i18n::Str::CardHintMenu);
+    model.window =
+        text::Chip(icon::kClock, text::HistoryWindow(static_cast<unsigned>(kHistory), settings_.intervalMs,
+                                                     S(i18n::Str::CardLastSeconds), S(i18n::Str::CardLastMinutes)));
+    model.hintLeft =
+        settings_.clickOpensTaskManager ? text::Chip(icon::kTaskManager, S(i18n::Str::CardHintClick)) : L"";
+    model.hintRight = text::Chip(icon::kOptions, S(i18n::Str::CardHintMenu));
     model.capacity = static_cast<int>(kHistory);
 
     auto row = [&](MetricId id, int key, const std::wstring& title) {
@@ -946,23 +949,28 @@ CardModel App::BuildCardModel() const {
         CardRow r = row(id, key, title);
         r.value = percentText(value);
         r.subtitle = std::move(subtitle);
-        r.peak = text::Format(S(i18n::Str::CardPeak), {percentText(peakOf(r) * 100.0)});
+        r.peak = text::Chip(icon::kPeak, text::Format(S(i18n::Str::CardPeak), {percentText(peakOf(r) * 100.0)}));
         model.rows.push_back(std::move(r));
     };
     auto memoryRow = [&](MetricId id, const wchar_t* title, uint64_t used, uint64_t total) {
         CardRow r = row(id, Key(id), title);
         r.value = gbText(text::GiB(used));
-        r.subtitle = text::Format(S(i18n::Str::CardOfTotal),
-                                  {gbText(text::GiB(total)), percentText(text::Ratio(used, total) * 100.0)});
-        r.peak = text::Format(S(i18n::Str::CardPeak), {gbText(text::GiB(total) * peakOf(r))});
+        r.subtitle =
+            text::IconParts(text::Format(S(i18n::Str::CardOfTotal),
+                                         {gbText(text::GiB(total)), percentText(text::Ratio(used, total) * 100.0)}),
+                            {icon::kMemory, icon::kUsage});
+        r.peak = text::Chip(icon::kPeak, text::Format(S(i18n::Str::CardPeak), {gbText(text::GiB(total) * peakOf(r))}));
         model.rows.push_back(std::move(r));
     };
 
     percentRow(MetricId::Cpu, Key(MetricId::Cpu), S(i18n::Str::CardCpu), s.cpu,
-               cpuDisplayName_ + L" · " + text::Format(S(i18n::Str::CardThreads), {std::to_wstring(info.logicalCpus)}));
+               text::JoinChips({text::Chip(icon::kChip, cpuDisplayName_),
+                                text::Chip(icon::kThreads, text::Format(S(i18n::Str::CardThreads),
+                                                                        {std::to_wstring(info.logicalCpus)}))}));
     memoryRow(MetricId::Ram, S(i18n::Str::CardMemory), s.ramUsed, s.ramTotal);
     if (s.gpuAvailable) {
-        percentRow(MetricId::Gpu, Key(MetricId::Gpu), S(i18n::Str::CardGpu), s.gpu, info.gpuName);
+        percentRow(MetricId::Gpu, Key(MetricId::Gpu), S(i18n::Str::CardGpu), s.gpu,
+                   text::Chip(icon::kDisplay, info.gpuName));
         if (s.vramTotal > 0) memoryRow(MetricId::Vram, S(i18n::Str::CardGpuMemory), s.vramUsed, s.vramTotal);
     }
     const logic::Availability available = Available();
@@ -978,17 +986,21 @@ CardModel App::BuildCardModel() const {
         r.load = 0.0f;
         r.neutral = true;
         r.value = RateText(n.downBps + n.upBps);
-        r.subtitle = text::Format(S(i18n::Str::CardNetIo), {RateText(n.downBps), RateText(n.upBps)});
-        if (!n.names.empty()) r.subtitle += L" \u00b7 " + n.names;
-        if (n.linkBps) r.subtitle += L" \u00b7 " + text::LinkSpeed(n.linkBps, decimal_);
+        std::wstring adapter = n.names;
+        if (n.linkBps) adapter += (adapter.empty() ? L"" : L" \u00b7 ") + text::LinkSpeed(n.linkBps, decimal_);
+        r.subtitle = text::JoinChips(
+            {text::IconParts(text::Format(S(i18n::Str::CardNetIo), {RateText(n.downBps), RateText(n.upBps)}),
+                             {icon::kDown, icon::kUp}),
+             adapter.empty() ? std::wstring() : text::Chip(n.wireless ? icon::kWifi : icon::kEthernet, adapter)});
         double peak = 0.0;
         for (double v : netHistory_) peak = std::max(peak, v);
-        r.peak = text::Format(S(i18n::Str::CardPeak), {RateText(static_cast<uint64_t>(peak))});
+        r.peak = text::Chip(icon::kPeak, text::Format(S(i18n::Str::CardPeak), {RateText(static_cast<uint64_t>(peak))}));
         model.rows.push_back(std::move(r));
     }
     if (s.diskAvailable) {
         auto io = [&](uint64_t read, uint64_t write) {
-            return text::Format(S(i18n::Str::CardDiskIo), {RateText(read), RateText(write)});
+            return text::IconParts(text::Format(S(i18n::Str::CardDiskIo), {RateText(read), RateText(write)}),
+                                   {icon::kDown, icon::kUp});
         };
         if (logic::SeparateDisks(settings_, s.disks.size())) {
             // One row per drive: "NVMe (C: E:)", its model and its own read/write rates.
@@ -997,7 +1009,7 @@ CardModel App::BuildCardModel() const {
                 std::wstring title = *kind ? kind : S(i18n::Str::CardDisk);
                 if (!disk.letters.empty()) title += L" (" + disk.letters + L")";
                 std::wstring subtitle = io(disk.readBps, disk.writeBps);
-                if (!disk.model.empty()) subtitle = disk.model + L" · " + subtitle;
+                if (!disk.model.empty()) subtitle = text::JoinChips({text::Chip(icon::kDrive, disk.model), subtitle});
                 percentRow(MetricId::Disk, kDiskKeyBase + disk.number, title, disk.active, std::move(subtitle));
                 model.rows.back().half = true;  // drives side by side: the card stays short
             }
@@ -1013,15 +1025,16 @@ CardModel App::BuildCardModel() const {
         r.neutral = true;
         r.load = !b.acOnline && b.percent <= 10.0 ? kCriticalLoad : !b.acOnline && b.percent <= 20.0 ? kWarnLoad : 0.0f;
         r.value = text::Format(S(i18n::Str::PercentFormat), {text::Percent(b.percent)});
-        r.subtitle = S(b.charging        ? i18n::Str::CardBatteryCharging
-                       : !b.acOnline     ? i18n::Str::CardBatteryOnBattery
-                       : b.percent >= 99 ? i18n::Str::CardBatteryFull
-                                         : i18n::Str::CardBatteryPlugged);
-        if (b.watts) r.subtitle += L" \u00b7 " + text::Watts(*b.watts, decimal_);
-        if (b.secondsLeft) {
-            r.subtitle +=
-                L" \u00b7 " + text::Format(S(i18n::Str::CardBatteryLeft), {text::HoursMinutes(*b.secondsLeft)});
-        }
+        const std::wstring state = S(b.charging        ? i18n::Str::CardBatteryCharging
+                                     : !b.acOnline     ? i18n::Str::CardBatteryOnBattery
+                                     : b.percent >= 99 ? i18n::Str::CardBatteryFull
+                                                       : i18n::Str::CardBatteryPlugged);
+        r.subtitle = text::JoinChips(
+            {text::Chip(b.acOnline ? icon::kCharging : icon::kBattery, state),
+             b.watts ? text::Chip(icon::kPower, text::Watts(*b.watts, decimal_)) : std::wstring(),
+             b.secondsLeft ? text::Chip(icon::kClock, text::Format(S(i18n::Str::CardBatteryLeft),
+                                                                   {text::HoursMinutes(*b.secondsLeft)}))
+                           : std::wstring()});
         model.rows.push_back(std::move(r));
     }
 
@@ -1096,7 +1109,9 @@ CardModel App::BuildCardModel() const {
         if (role != FanRole::Unknown) tile.detail = r.name;  // "Fan #1": which header it is
         model.sensors.push_back(std::move(tile));
     }
-    if (!s.advancedSensors && !SensorsTool().empty()) model.sensorsHint = S(i18n::Str::CardSensorsHint);
+    if (!s.advancedSensors && !SensorsTool().empty()) {
+        model.sensorsHint = text::Chip(icon::kThermometer, S(i18n::Str::CardSensorsHint));
+    }
     if (!model.sensors.empty() || !model.sensorsHint.empty()) model.sensorsTitle = S(i18n::Str::CardSensors);
 
     // Notice: a message the user asked for (e.g. "you have the latest version"), else update news.
@@ -1106,7 +1121,7 @@ CardModel App::BuildCardModel() const {
         const std::wstring version = update::ToString(release->version);
         switch (updater_.state()) {
             case update::State::Available:
-                model.notice = text::Format(S(i18n::Str::CardUpdateAvailable), {version});
+                model.notice = text::Chip(icon::kUpdate, text::Format(S(i18n::Str::CardUpdateAvailable), {version}));
                 break;
             case update::State::Downloading:
             case update::State::Ready:

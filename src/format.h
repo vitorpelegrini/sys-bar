@@ -4,6 +4,7 @@
 #include <initializer_list>
 #include <string>
 #include <string_view>
+#include <vector>
 
 // Pure formatting helpers (no window or system dependencies) - fully covered by tests.
 namespace text {
@@ -48,6 +49,15 @@ std::wstring LinkSpeed(uint64_t bitsPerSecond, wchar_t decimal);
 std::wstring HoursMinutes(int seconds);
 // Battery power: "+12 W" (charging), "-8,4 W" (discharging).
 std::wstring Watts(double watts, wchar_t decimal);
+
+// Icon chips for the card's detail lines: "<icon>\u00a0text", joined by an em space (a line may wrap
+// between chips, never inside one). An icon of 0 gives a plain chip.
+std::wstring Chip(wchar_t icon, std::wstring_view text);
+std::wstring JoinChips(std::initializer_list<std::wstring_view> chips);
+// Splits a translated pattern's result on its " · " separators: "Read 1 MB/s · Write 2 MB/s" -> 2 parts.
+std::vector<std::wstring> SplitParts(std::wstring_view text);
+// A translated "A · B" text as icon chips (icons in order); unchanged if the parts do not match.
+std::wstring IconParts(const std::wstring& text, std::initializer_list<wchar_t> icons);
 
 // First drive letter of a PDH disk instance in alphabetical order: "E: C:" -> "C:"; "" when none.
 std::wstring FirstDriveLetter(std::wstring_view letters);
