@@ -373,9 +373,9 @@ change is listed in the [CHANGELOG](CHANGELOG.md).
 
 ## Code signing policy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
-[SignPath Foundation](https://signpath.org) (application in progress; until it is approved, releases are not
-signed).
+Releases are not code-signed yet, so Windows SmartScreen may warn on the first run. Every file is built from
+the tagged sources by GitHub Actions and published with its SHA-256 checksum. When a certificate is in place,
+this policy applies to every signed release.
 
 - **Committers and reviewers:** [Vitor Pelegrini de Souza](https://github.com/vitorpelegrini)
 - **Approvers:** [Vitor Pelegrini de Souza](https://github.com/vitorpelegrini)

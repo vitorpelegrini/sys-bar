@@ -379,9 +379,9 @@ cada mudança está no [CHANGELOG](CHANGELOG.md).
 
 ## Política de assinatura de código
 
-Assinatura de código gratuita fornecida por [SignPath.io](https://about.signpath.io), certificado da
-[SignPath Foundation](https://signpath.org) (inscrição em andamento; até a aprovação, as releases não são
-assinadas).
+As releases ainda não têm assinatura de código, então o SmartScreen do Windows pode avisar na primeira execução.
+Cada arquivo é compilado a partir do código da tag pelo GitHub Actions e publicado com seu SHA-256. Quando houver
+um certificado, esta política vale para toda release assinada.
 
 - **Commits e revisão:** [Vitor Pelegrini de Souza](https://github.com/vitorpelegrini)
 - **Aprovação:** [Vitor Pelegrini de Souza](https://github.com/vitorpelegrini)

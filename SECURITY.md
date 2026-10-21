@@ -62,5 +62,4 @@ You should get an answer within a few days.
 
 - Release binaries are built from tagged sources by GitHub Actions. The build job runs with a read-only token;
   a separate job publishes. Every artifact is published with its SHA-256 checksum.
-- Code signing through SignPath Foundation is in progress; see the
-  [code signing policy](README.md#code-signing-policy).
+- Releases are not code-signed yet; see the [code signing policy](README.md#code-signing-policy).
