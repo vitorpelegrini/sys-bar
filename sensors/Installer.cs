@@ -74,7 +74,7 @@ namespace SysBar.Sensors
                     foreach (var file in files) Manifest.WriteAtomic(Path.Combine(Target, file.Key), file.Value);
                 }
 
-                if (!DriverInstalled("PawnIO"))
+                if (!DriverInstalled("PawnIO") || !SensorReader.PawnIoReady())
                 {
                     int result = InstallPawnIO(source);
                     if (result != ExitOk)
@@ -217,7 +217,7 @@ namespace SysBar.Sensors
             {
                 try { Directory.Delete(folder, recursive: true); } catch (Exception) { }
             }
-            if (!DriverInstalled("PawnIO"))
+            if (!DriverInstalled("PawnIO") || !SensorReader.PawnIoReady())
             {
                 Log.Write("install: PawnIO installation was cancelled or failed");
                 return ExitFailed;

@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using LibreHardwareMonitor.Hardware;
+using Microsoft.Win32;
 
 namespace SysBar.Sensors
 {
@@ -19,6 +21,31 @@ namespace SysBar.Sensors
         private TimeSpan _lastStorageUpdate = TimeSpan.FromDays(-1);
         private TimeSpan _lastGpuUpdate = TimeSpan.FromDays(-1);
         private TimeSpan _lastFanUpdate = TimeSpan.FromDays(-1);
+
+        /// <summary>
+        /// Whether PawnIO can be used: LibreHardwareMonitor finds PawnIOLib.dll through PawnIO's uninstall entry.
+        /// Uninstalling PawnIO removes that folder but may leave the driver registered, so the driver alone
+        /// does not tell.
+        /// </summary>
+        public static bool PawnIoReady()
+        {
+            try
+            {
+                using RegistryKey? key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO");
+                return key?.GetValue("InstallLocation") is string folder && folder.Length > 0 &&
+                       File.Exists(Path.Combine(folder, "PawnIOLib.dll"));
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Opened while PawnIO was missing (no CPU temperature, no board fans): worth opening again once it is
+        /// back, e.g. installed by another program after we started.
+        /// </summary>
+        public bool OpenedWithoutPawnIo { get; } = !PawnIoReady();
 
         public SensorReader()
         {

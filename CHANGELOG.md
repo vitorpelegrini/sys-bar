@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-22
+
+### Fixed
+
+- The CPU temperature and board fans could go missing until the sensors service was restarted: when PawnIO
+  was uninstalled (by its own uninstaller or another program's), its driver stayed registered, so the
+  installer took it as present and skipped it, and a service started while PawnIO was missing never looked
+  again. PawnIO now counts as installed only when its library is in place, and the service opens the sensors
+  again as soon as PawnIO comes back.
+
 ## [1.0.1] - 2026-10-20
 
 ### Changed
@@ -105,6 +115,7 @@ First public release.
   rollback, and backs off for a day after a failed update.
 - No telemetry: the only network traffic is the update check, which can be turned off.
 
-[Unreleased]: https://github.com/vitorpelegrini/sys-bar/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/vitorpelegrini/sys-bar/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/vitorpelegrini/sys-bar/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/vitorpelegrini/sys-bar/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/vitorpelegrini/sys-bar/releases/tag/v1.0.0
