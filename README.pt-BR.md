@@ -47,8 +47,8 @@
 
 O Gerenciador de Tarefas mostra tudo, mas só quando você o abre. Widgets e overlays ficam atrás das janelas ou
 na frente delas. O sys-bar coloca os números que você confere o dia inteiro **dentro da própria barra de
-tarefas**, ao lado do relógio: sempre visíveis, nunca no caminho, e custando cerca de meio por cento de um
-núcleo de CPU.
+tarefas**, ao lado do relógio: sempre visíveis, nunca no caminho, e custando cerca de um terço de um por
+cento de um núcleo de CPU.
 
 Passe o mouse para ver um card detalhado com gráficos do último minuto, temperaturas e fans. Clique para abrir o
 Gerenciador de Tarefas. Botão direito para todo o resto.
@@ -110,14 +110,16 @@ Gerenciador de Tarefas. Botão direito para todo o resto.
 
   | | sys-bar | Serviço de sensores (opcional) | Juntos |
   | --- | --- | --- | --- |
-  | CPU | 0,55% de um núcleo | 0,27% de um núcleo | **0,02% da máquina** |
-  | Memória | 24 MB (9 MB exclusivos) | 52 MB (25 MB exclusivos) | **76 MB** |
+  | CPU | 0,36% de um núcleo | 0,21% de um núcleo | **0,02% da máquina** |
+  | Memória | 18 MB (4 MB exclusivos) | 28 MB (19 MB exclusivos) | **47 MB** |
   | GPU | 0,01% | 0% | **0,01%** |
   | Disco | 0 bytes lidos ou gravados | 0 bytes | **0 bytes** |
 
-  Os quadros de animação redesenham só as barrinhas que se mexeram (alguns microssegundos cada), a rede é
-  lida pelas placas em uso em vez da tabela inteira de interfaces, e as fans, que só aparecem no card, são
-  lidas a cada segundo só enquanto ele está aberto.
+  Os contadores são lidos com uma única chamada de baixo nível por segundo, sem o PDH (que sozinho ocuparia
+  mais memória que o sys-bar inteiro), o Direct2D desenha direto no bitmap da barra, os quadros de animação
+  redesenham só as barrinhas que se mexeram (alguns microssegundos cada), e as fans, que só aparecem no card,
+  são lidas a cada segundo só enquanto ele está aberto. Com a tela desligada ou a sessão bloqueada o sys-bar
+  não acorda nenhuma vez, e com o sys-bar fechado o serviço não usa CPU.
 - **Aguenta o mundo real**: Explorer reiniciando, driver de vídeo resetando, suspensão, mudanças de DPI e de
   tela, monitores e discos conectados e removidos.
 - **Se atualiza sozinho** pelas Releases do GitHub, verificando tudo antes de rodar (veja

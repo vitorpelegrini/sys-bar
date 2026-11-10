@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-11-09
+
 ### Changed
 
 - Less of everything, same pixels and same numbers. Measured against 1.0.2 on the same 36-thread desktop, one
@@ -21,7 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The card's bitmap and render target (4 to 7 MB) are freed when it closes. While it is open, its shadow
     and body are drawn once and reused, and an update costs about a fifth less.
   - With the display off or the session locked sys-bar no longer wakes up at all, and the sensors service
-    sleeps until it is asked instead of waking every second.
+    sleeps until it is asked instead of waking every second: with sys-bar closed it uses no CPU. Its memory
+    in use went from 38 to 28 MB (committed: 81 to 51 MB).
   - The executable is 90 KB smaller.
 - A card reader without a card is not listed as a disk.
 - The strip's text for screen readers is answered when asked for, instead of being announced as a name change
@@ -148,7 +151,8 @@ First public release.
   rollback, and backs off for a day after a failed update.
 - No telemetry: the only network traffic is the update check, which can be turned off.
 
-[Unreleased]: https://github.com/vitorpelegrini/sys-bar/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/vitorpelegrini/sys-bar/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/vitorpelegrini/sys-bar/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/vitorpelegrini/sys-bar/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/vitorpelegrini/sys-bar/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/vitorpelegrini/sys-bar/releases/tag/v1.0.0
