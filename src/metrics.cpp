@@ -5,7 +5,6 @@
 #include "version.h"
 
 #include <dxgi.h>
-#include <pdhmsg.h>
 
 #include <algorithm>
 #include <cmath>
@@ -23,19 +22,29 @@ constexpr UINT kMicrosoftVendor = 0x1414;                    // "Microsoft Basic
 constexpr UINT kBasicRenderDevice = 0x8c;
 constexpr DWORD kStopGraceMs = 1500;
 constexpr ULONGLONG kCounterRetryMs = 30'000;  // GPU counters missing at logon are added later
+constexpr int kDiskMissLimit = 2;              // rounds the last disks are kept when no drive answers
 
-bool IsValidStatus(DWORD status) {
-    return status == PDH_CSTATUS_VALID_DATA || status == PDH_CSTATUS_NEW_DATA;
+wchar_t LowerAscii(wchar_t c) {
+    return c >= L'A' && c <= L'Z' ? static_cast<wchar_t>(c + (L'a' - L'A')) : c;
 }
 
-// Case-insensitive substring search (PDH uses lowercase hex today, but we do not rely on it).
-bool ContainsNoCase(const wchar_t* haystack, const std::wstring& needle) {
-    const size_t n = needle.size();
-    if (n == 0) return true;
+std::wstring LowerAscii(const std::wstring& s) {
+    std::wstring out = s;
+    for (wchar_t& c : out) c = LowerAscii(c);
+    return out;
+}
+
+// Finds `needle` (lowercase ASCII) in `haystack` ignoring ASCII case: instance names spell the adapter LUID
+// in upper- or lowercase hex depending on the Windows version.
+const wchar_t* FindNoCase(const wchar_t* haystack, const std::wstring& needle) {
+    if (needle.empty()) return haystack;
     for (const wchar_t* p = haystack; *p; ++p) {
-        if (_wcsnicmp(p, needle.c_str(), n) == 0) return true;
+        if (LowerAscii(*p) != needle[0]) continue;
+        size_t i = 1;
+        while (i < needle.size() && p[i] && LowerAscii(p[i]) == needle[i]) ++i;
+        if (i == needle.size()) return p;
     }
-    return false;
+    return nullptr;
 }
 
 std::wstring ReadCpuName() {
@@ -60,22 +69,23 @@ void UseEfficiencyMode() {
 
 }  // namespace
 
-GpuEngineResult AggregateGpuEngines(const PDH_FMT_COUNTERVALUE_ITEM_W* items, DWORD count, const std::wstring& luidTag,
+GpuEngineResult AggregateGpuEngines(const CounterItem* items, size_t count, const std::wstring& luidTag,
                                     std::unordered_map<std::wstring_view, double>& scratch) {
     // Instances look like: pid_1234_luid_0x..._0x..._phys_0_eng_3_engtype_3D
     // Sum per engine (over all processes) and report the busiest engine, like Task Manager.
     GpuEngineResult result;
     scratch.clear();
     if (luidTag.empty()) return result;
-    for (DWORD i = 0; i < count; ++i) {
-        const wchar_t* name = items[i].szName;
-        if (!name || !ContainsNoCase(name, luidTag)) continue;
+    const std::wstring tag = LowerAscii(luidTag);
+    for (size_t i = 0; i < count; ++i) {
+        const wchar_t* name = items[i].name;
+        if (!name || !FindNoCase(name, tag)) continue;
         result.sawAdapter = true;
-        if (!IsValidStatus(items[i].FmtValue.CStatus)) continue;
+        if (!items[i].valid) continue;
         const wchar_t* phys = wcsstr(name, L"_phys_");
         const wchar_t* type = wcsstr(name, L"_engtype_");
         if (!phys || !type || type < phys) continue;
-        const double v = items[i].FmtValue.doubleValue;
+        const double v = items[i].value;
         if (v > 0.0 && std::isfinite(v)) scratch[std::wstring_view(phys, static_cast<size_t>(type - phys))] += v;
     }
     for (const auto& [key, value] : scratch) result.busiest = std::max(result.busiest, value);
@@ -83,17 +93,15 @@ GpuEngineResult AggregateGpuEngines(const PDH_FMT_COUNTERVALUE_ITEM_W* items, DW
     return result;
 }
 
-uint64_t SumAdapterMemory(const PDH_FMT_COUNTERVALUE_ITEM_W* items, DWORD count, const std::wstring& luidTag,
-                          bool& sawAdapter) {
+uint64_t SumAdapterMemory(const CounterItem* items, size_t count, const std::wstring& luidTag, bool& sawAdapter) {
     uint64_t used = 0;
     sawAdapter = false;
     if (luidTag.empty()) return 0;
-    for (DWORD i = 0; i < count; ++i) {
-        if (!items[i].szName || !ContainsNoCase(items[i].szName, luidTag)) continue;
+    const std::wstring tag = LowerAscii(luidTag);
+    for (size_t i = 0; i < count; ++i) {
+        if (!items[i].name || !FindNoCase(items[i].name, tag)) continue;
         sawAdapter = true;
-        if (IsValidStatus(items[i].FmtValue.CStatus) && items[i].FmtValue.largeValue > 0) {
-            used += static_cast<uint64_t>(items[i].FmtValue.largeValue);
-        }
+        if (items[i].valid) used += items[i].large;
     }
     return used;
 }
@@ -174,11 +182,9 @@ SystemInfo MetricsSampler::Info() const {
 
 void MetricsSampler::Run() {
     UseEfficiencyMode();
-    OpenQuery();
+    OpenCounters();
     SelectAdapters();
-    if (query_) PdhCollectQueryData(query_);  // prime the rate counters
-    double primed = 0.0;
-    ReadCpuFallback(primed);
+    Prime();  // rates need two readings
 
     const HANDLE handles[2] = {stopEvent_, wakeEvent_};
     ULONGLONG nextDue = GetTickCount64() + kFirstSampleDelayMs;
@@ -188,8 +194,7 @@ void MetricsSampler::Run() {
             if (WaitForMultipleObjects(2, handles, FALSE, INFINITE) == WAIT_OBJECT_0) break;
             if (!paused_) {
                 // Resuming: start a fresh measurement window instead of averaging over the pause.
-                if (query_) PdhCollectQueryData(query_);
-                ReadCpuFallback(primed);
+                Prime();
                 network_.Update(netReader_.Read(GetTickCount64(), true), GetTickCount64());
                 nextDue = GetTickCount64() + kFirstSampleDelayMs;
             }
@@ -242,58 +247,57 @@ void MetricsSampler::Run() {
         if (nextDue <= after) nextDue = after + interval;
     }
 
-    CloseQuery();
+    CloseCounters();
 }
 
-bool MetricsSampler::OpenQuery() {
-    if (PdhOpenQueryW(nullptr, 0, &query_) != ERROR_SUCCESS) {
-        query_ = nullptr;
-        return false;
-    }
-    // English counter names work on every Windows display language (localized names would not).
-    if (PdhAddEnglishCounterW(query_, L"\\Processor Information(_Total)\\% Processor Utility", 0, &cpuCounter_) !=
-        ERROR_SUCCESS) {
-        cpuCounter_ = nullptr;
-        if (PdhAddEnglishCounterW(query_, L"\\Processor(_Total)\\% Processor Time", 0, &cpuCounter_) != ERROR_SUCCESS) {
-            cpuCounter_ = nullptr;
-        }
+void MetricsSampler::OpenCounters() {
+    // CPU: "% Processor Utility", the metric Task Manager shows. It is the growth of the counter over the
+    // growth of its base, and goes above 100 with turbo: clamped where it is used.
+    perf::CounterRef utility;
+    if (perf::Find(L"Processor Information", L"% Processor Utility", utility) && utility.baseId != perf::kNoCounter) {
+        cpuUtility_ = perf_.Add(utility.set, utility.id, L"_Total");
+        cpuUtilityBase_ = perf_.Add(utility.set, utility.baseId, L"_Total");
     }
     AddGpuCounters();
-    // Physical disks: Task Manager's "active time" is 100 - % Idle Time.
-    if (PdhAddEnglishCounterW(query_, L"\\PhysicalDisk(*)\\% Idle Time", 0, &diskIdleCounter_) != ERROR_SUCCESS ||
-        PdhAddEnglishCounterW(query_, L"\\PhysicalDisk(*)\\Disk Read Bytes/sec", 0, &diskReadCounter_) !=
-            ERROR_SUCCESS ||
-        PdhAddEnglishCounterW(query_, L"\\PhysicalDisk(*)\\Disk Write Bytes/sec", 0, &diskWriteCounter_) !=
-            ERROR_SUCCESS) {
-        diskIdleCounter_ = diskReadCounter_ = diskWriteCounter_ = nullptr;
-    }
-    return true;
 }
 
 void MetricsSampler::AddGpuCounters() {
     // The GPU counter sets can be missing early at logon (driver still loading): added later if so.
     nextCounterRetry_ = GetTickCount64() + kCounterRetryMs;
-    if (!query_) return;
-    if (!gpuEngineCounter_ && PdhAddEnglishCounterW(query_, L"\\GPU Engine(*)\\Utilization Percentage", 0,
-                                                    &gpuEngineCounter_) != ERROR_SUCCESS) {
-        gpuEngineCounter_ = nullptr;
+    const bool searchAll = !gpuCountersSearched_;
+    gpuCountersSearched_ = true;
+    perf::CounterRef counter;
+    if (gpuEngine_ < 0 && perf::Find(L"GPU Engine", L"Utilization Percentage", counter, searchAll)) {
+        gpuEngine_ = perf_.Add(counter.set, counter.id, L"*");
     }
-    if (!gpuMemoryCounter_ && PdhAddEnglishCounterW(query_, L"\\GPU Adapter Memory(*)\\Dedicated Usage", 0,
-                                                    &gpuMemoryCounter_) != ERROR_SUCCESS) {
-        gpuMemoryCounter_ = nullptr;
+    if (gpuMemory_ < 0 && perf::Find(L"GPU Adapter Memory", L"Dedicated Usage", counter, searchAll)) {
+        gpuMemory_ = perf_.Add(counter.set, counter.id, L"*");
     }
 }
 
-void MetricsSampler::CloseQuery() {
-    if (query_) PdhCloseQuery(query_);
-    query_ = nullptr;
-    cpuCounter_ = gpuEngineCounter_ = gpuMemoryCounter_ = nullptr;
-    diskIdleCounter_ = diskReadCounter_ = diskWriteCounter_ = nullptr;
+void MetricsSampler::CloseCounters() {
+    perf_.Close();
+    cpuUtility_ = cpuUtilityBase_ = gpuEngine_ = gpuMemory_ = -1;
+    haveUtility_ = false;
+    gpuCountersSearched_ = false;
+    engineTotals_.clear();
+    engineTime_ = 0;
+    diskCounters_.Close();
     gpuSensors_.Close();
     storage_.Close();
     netReader_.Close();
     diskInstanceKey_.clear();  // a later Start() enumerates the drives again
     lastTemperatureRead_.clear();
+}
+
+// A fresh measurement window: the next sample's rates and percentages cover the time from now on.
+void MetricsSampler::Prime() {
+    const bool collected = perf_.Collect();
+    double ignored = 0.0;
+    ReadUtility(collected, ignored);
+    ReadEngines(collected);
+    ReadCpuFallback(ignored);
+    diskCounters_.Prime(GetTickCount64());
 }
 
 // Lists the physical GPUs, main one (largest dedicated memory) first.
@@ -330,18 +334,80 @@ bool MetricsSampler::SelectAdapters() {
     return !adapters_.empty();
 }
 
-bool MetricsSampler::ReadArray(PDH_HCOUNTER counter, DWORD format, std::vector<BYTE>& buffer, DWORD& count) {
-    for (int attempt = 0; attempt < 3; ++attempt) {
-        DWORD size = static_cast<DWORD>(buffer.size());
-        count = 0;
-        const PDH_STATUS status = PdhGetFormattedCounterArrayW(
-            counter, format, &size, &count,
-            buffer.empty() ? nullptr : reinterpret_cast<PDH_FMT_COUNTERVALUE_ITEM_W*>(buffer.data()));
-        if (status == ERROR_SUCCESS) return true;
-        if (status != PDH_MORE_DATA) return false;
-        buffer.resize(size + size / 4 + 1024);  // headroom for new instances
+// CPU utility since the previous call, in percent (not capped at 100). False when there is no previous
+// reading yet or the counter is not available.
+bool MetricsSampler::ReadUtility(bool collected, double& percent) {
+    const std::vector<perf::Item>* utility = collected ? &perf_.Items(cpuUtility_) : nullptr;
+    const std::vector<perf::Item>* base = collected ? &perf_.Items(cpuUtilityBase_) : nullptr;
+    if (!utility || utility->empty() || base->empty()) {
+        haveUtility_ = false;
+        return false;
     }
-    return false;
+    uint64_t grew = 0, baseGrew = 0;
+    const bool ok = haveUtility_ && perf::Delta(lastUtility_, utility->front(), grew) &&
+                    perf::Delta(lastUtilityBase_, base->front(), baseGrew) && baseGrew > 0;
+    if (ok) percent = static_cast<double>(grew) / static_cast<double>(baseGrew);
+    lastUtility_ = utility->front();
+    lastUtilityBase_ = base->front();
+    lastUtility_.name = lastUtilityBase_.name = L"";  // the block they point into is reused
+    haveUtility_ = true;
+    return ok;
+}
+
+// Turns the running time of every GPU engine instance into its utilization since the previous call
+// (engineItems_). False when there is no previous reading to compare with.
+bool MetricsSampler::ReadEngines(bool collected) {
+    engineItems_.clear();
+    if (!collected || gpuEngine_ < 0) {
+        engineTime_ = 0;  // the next reading starts over
+        return false;
+    }
+    const std::vector<perf::Item>& now = perf_.Items(gpuEngine_);
+    const int64_t time = perf_.Time100ns();
+    const double elapsed = engineTime_ ? static_cast<double>(time - engineTime_) : 0.0;
+    const bool rates = elapsed > 0.0;
+
+    // Instances keep their order from one sample to the next unless a process came or went: compared in
+    // place first, and looked up by name only for those that moved.
+    engineIndex_.clear();
+    bool indexed = false;
+    engineItems_.reserve(now.size());
+    for (size_t i = 0; i < now.size(); ++i) {
+        CounterItem item;
+        item.name = now[i].name;
+        item.valid = false;
+        if (rates) {
+            const EngineTotal* before = nullptr;
+            if (i < engineTotals_.size() && engineTotals_[i].name == now[i].name) {
+                before = &engineTotals_[i];
+            } else {
+                if (!indexed) {
+                    for (size_t k = 0; k < engineTotals_.size(); ++k) engineIndex_.emplace(engineTotals_[k].name, k);
+                    indexed = true;
+                }
+                if (const auto found = engineIndex_.find(now[i].name); found != engineIndex_.end()) {
+                    before = &engineTotals_[found->second];
+                }
+            }
+            uint64_t grew = 0;
+            if (before && perf::Delta(before->total, now[i], grew)) {
+                item.value = 100.0 * static_cast<double>(grew) / elapsed;
+                item.valid = true;
+            }
+        }
+        engineItems_.push_back(item);
+    }
+    engineIndex_.clear();  // it points into the names replaced below
+
+    // Remember this reading. Names are only copied when they changed: no allocation on a quiet system.
+    engineTotals_.resize(now.size());
+    for (size_t i = 0; i < now.size(); ++i) {
+        if (engineTotals_[i].name != now[i].name) engineTotals_[i].name = now[i].name;
+        engineTotals_[i].total = now[i];
+        engineTotals_[i].total.name = L"";  // the block it points into is reused
+    }
+    engineTime_ = time;
+    return rates;
 }
 
 bool MetricsSampler::ReadCpuFallback(double& value) {
@@ -368,19 +434,12 @@ bool MetricsSampler::ReadCpuFallback(double& value) {
 
 void MetricsSampler::Collect(MetricsSnapshot& out) {
     out.valid = true;
-    const bool collected = query_ && PdhCollectQueryData(query_) == ERROR_SUCCESS;
+    const bool collected = perf_.Collect();
 
-    // CPU
-    bool cpuOk = false;
-    if (collected && cpuCounter_) {
-        PDH_FMT_COUNTERVALUE value{};
-        if (PdhGetFormattedCounterValue(cpuCounter_, PDH_FMT_DOUBLE | PDH_FMT_NOCAP100, nullptr, &value) ==
-                ERROR_SUCCESS &&
-            IsValidStatus(value.CStatus)) {
-            out.cpu = value.doubleValue;
-            cpuOk = true;
-        }
-    }
+    // CPU: utility when the counter is there, else plain processor time.
+    double utility = 0.0;
+    const bool cpuOk = ReadUtility(collected, utility);
+    if (cpuOk) out.cpu = utility;
     double fallback = 0.0;
     const bool fallbackOk = ReadCpuFallback(fallback);
     if (!cpuOk && fallbackOk) out.cpu = fallback;
@@ -394,7 +453,7 @@ void MetricsSampler::Collect(MetricsSnapshot& out) {
     }
 
     CollectGpu(out, collected);
-    CollectDisks(out, collected);
+    CollectDisks(out);
     CollectSensors(out);
     const ULONGLONG tick = GetTickCount64();
     out.network = network_.Update(netReader_.Read(tick), tick);
@@ -405,7 +464,8 @@ void MetricsSampler::CollectGpu(MetricsSnapshot& out, bool collected) {
     // Availability is latched once the counters produced data, so a transient failure (or a burst of
     // process churn) reuses the last values instead of making GPU/VRAM blink in and out.
     if (adapters_.empty() && GetTickCount64() >= nextAdapterSearch_) SelectAdapters();
-    if ((!gpuEngineCounter_ || !gpuMemoryCounter_) && GetTickCount64() >= nextCounterRetry_) AddGpuCounters();
+    if ((gpuEngine_ < 0 || gpuMemory_ < 0) && GetTickCount64() >= nextCounterRetry_) AddGpuCounters();
+    const bool engineRates = ReadEngines(collected);  // every sample, so each covers exactly one interval
     auto keepLast = [&] {
         out.gpuAvailable = gpuSeen_;
         out.gpu = lastGpu_.gpu;
@@ -429,22 +489,21 @@ void MetricsSampler::CollectGpu(MetricsSnapshot& out, bool collected) {
     double busiest = 0.0;
     uint64_t vramUsed = 0;
 
-    DWORD count = 0;
-    if (gpuEngineCounter_ && ReadArray(gpuEngineCounter_, PDH_FMT_DOUBLE | PDH_FMT_NOCAP100, engineBuffer_, count)) {
+    if (engineRates) {
         engineOk = true;
-        const auto* items = reinterpret_cast<const PDH_FMT_COUNTERVALUE_ITEM_W*>(engineBuffer_.data());
         for (const Adapter& adapter : adapters_) {
-            const auto result = AggregateGpuEngines(items, count, adapter.tag, engines_);
+            const auto result = AggregateGpuEngines(engineItems_.data(), engineItems_.size(), adapter.tag, engines_);
             sawAny |= result.sawAdapter;
             busiest = std::max(busiest, result.busiest);
         }
     }
-    count = 0;
-    if (gpuMemoryCounter_ && ReadArray(gpuMemoryCounter_, PDH_FMT_LARGE, memoryBuffer_, count)) {
+    if (gpuMemory_ >= 0) {
         memoryOk = true;
+        memoryItems_.clear();
+        for (const perf::Item& item : perf_.Items(gpuMemory_))
+            memoryItems_.push_back({item.name, 0.0, item.value, true});
         bool saw = false;
-        vramUsed = SumAdapterMemory(reinterpret_cast<const PDH_FMT_COUNTERVALUE_ITEM_W*>(memoryBuffer_.data()), count,
-                                    main.tag, saw);
+        vramUsed = SumAdapterMemory(memoryItems_.data(), memoryItems_.size(), main.tag, saw);
         sawAny |= saw;
     }
 
@@ -466,45 +525,35 @@ void MetricsSampler::CollectGpu(MetricsSnapshot& out, bool collected) {
     lastGpu_ = out;
 }
 
-void MetricsSampler::CollectDisks(MetricsSnapshot& out, bool collected) {
-    if (!collected || !diskIdleCounter_ || !diskReadCounter_ || !diskWriteCounter_) return;
-    const PDH_HCOUNTER counters[3] = {diskIdleCounter_, diskReadCounter_, diskWriteCounter_};
-    DWORD counts[3] = {};
-    for (int i = 0; i < 3; ++i) {
-        if (!ReadArray(counters[i], PDH_FMT_DOUBLE | PDH_FMT_NOCAP100, diskBuffers_[i], counts[i])) {
-            // A transient read failure: keep the last disks instead of making the section blink.
+void MetricsSampler::CollectDisks(MetricsSnapshot& out) {
+    const ULONGLONG now = GetTickCount64();
+    if (disksChanged_.exchange(false)) diskCounters_.Invalidate();
+    const std::vector<hw::DiskActivity> activity = diskCounters_.Read(now);
+    if (activity.empty()) {
+        // No drive answered (they are being listed again): keep the last disks for a moment instead of
+        // making the section blink.
+        if (lastDisks_.diskAvailable && ++diskMisses_ <= kDiskMissLimit) {
             out.disks = lastDisks_.disks;
             out.diskActive = lastDisks_.diskActive;
             out.diskReadBps = lastDisks_.diskReadBps;
             out.diskWriteBps = lastDisks_.diskWriteBps;
             out.diskAvailable = lastDisks_.diskAvailable;
-            return;
+        } else {
+            lastDisks_ = {};
         }
+        return;
     }
-    const auto* idle = reinterpret_cast<const PDH_FMT_COUNTERVALUE_ITEM_W*>(diskBuffers_[0].data());
-    const auto* read = reinterpret_cast<const PDH_FMT_COUNTERVALUE_ITEM_W*>(diskBuffers_[1].data());
-    const auto* write = reinterpret_cast<const PDH_FMT_COUNTERVALUE_ITEM_W*>(diskBuffers_[2].data());
-    // The three arrays list the same instances, but the order is not guaranteed: match by name.
-    auto valueOf = [](const PDH_FMT_COUNTERVALUE_ITEM_W* items, DWORD count, const wchar_t* name) {
-        for (DWORD i = 0; i < count; ++i) {
-            if (items[i].szName && wcscmp(items[i].szName, name) == 0 && IsValidStatus(items[i].FmtValue.CStatus) &&
-                std::isfinite(items[i].FmtValue.doubleValue)) {
-                return std::max(0.0, items[i].FmtValue.doubleValue);
-            }
-        }
-        return 0.0;
-    };
+    diskMisses_ = 0;
 
     std::wstring key;
-    for (DWORD i = 0; i < counts[0]; ++i) {
+    for (const hw::DiskActivity& drive : activity) {
         DiskSnapshot disk;
-        if (!hw::ParseDiskInstance(idle[i].szName, disk.number, disk.letters)) continue;
-        key += idle[i].szName;
-        key += L'|';
-        const double idlePercent = IsValidStatus(idle[i].FmtValue.CStatus) ? idle[i].FmtValue.doubleValue : 100.0;
-        disk.active = std::clamp(100.0 - (std::isfinite(idlePercent) ? idlePercent : 100.0), 0.0, 100.0);
-        disk.readBps = static_cast<uint64_t>(valueOf(read, counts[1], idle[i].szName));
-        disk.writeBps = static_cast<uint64_t>(valueOf(write, counts[2], idle[i].szName));
+        disk.number = drive.number;
+        disk.letters = drive.letters;
+        disk.active = drive.active;
+        disk.readBps = drive.readBps;
+        disk.writeBps = drive.writeBps;
+        key += std::to_wstring(drive.number) + L' ' + drive.letters + L'|';
         out.disks.push_back(std::move(disk));
     }
     if (key != diskInstanceKey_) {  // a disk was added or removed: read the models again
@@ -514,7 +563,6 @@ void MetricsSampler::CollectDisks(MetricsSnapshot& out, bool collected) {
         storage_.Refresh(numbers);
     }
 
-    const ULONGLONG now = GetTickCount64();
     for (DiskSnapshot& disk : out.disks) {
         // Temperatures are only read while a disk is busy anyway, never waking a sleeping drive.
         const bool busy = disk.readBps > 0 || disk.writeBps > 0 || disk.active >= 1.0;  // not idle-time noise

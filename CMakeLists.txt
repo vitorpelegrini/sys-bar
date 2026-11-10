@@ -42,13 +42,14 @@ add_library(sysbar_core STATIC
     src/trayprobe.cpp
     src/signature.cpp
     src/metrics.cpp
+    src/perf.cpp
     src/renderer.cpp
     src/sensorfeed.cpp
     src/settings.cpp
     src/update.cpp
 )
 target_include_directories(sysbar_core PUBLIC src)
-target_link_libraries(sysbar_core PUBLIC d2d1 dwrite dxgi gdi32 pdh shell32 ole32 advapi32 wtsapi32 winhttp bcrypt
+target_link_libraries(sysbar_core PUBLIC d2d1 dwrite dxgi gdi32 shell32 ole32 advapi32 wtsapi32 winhttp bcrypt
                       iphlpapi setupapi uiautomationcore wintrust crypt32)
 sysbar_options(sysbar_core)
 
@@ -66,12 +67,13 @@ if(SYSBAR_BUILD_TESTS)
         tests/test_hardware.cpp
         tests/test_i18n.cpp
         tests/test_logic.cpp
+        tests/test_perf.cpp
         tests/test_update.cpp
         tests/test_render.cpp
         tests/test_sensorfeed.cpp
         tests/test_system.cpp
         src/app.manifest)
-    target_link_libraries(sysbar-tests PRIVATE sysbar_core windowscodecs)
+    target_link_libraries(sysbar-tests PRIVATE sysbar_core windowscodecs pdh)
     sysbar_options(sysbar-tests)
     add_test(NAME sysbar-tests COMMAND sysbar-tests --previews ${CMAKE_BINARY_DIR}/previews)
 endif()

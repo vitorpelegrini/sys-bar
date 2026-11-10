@@ -173,8 +173,8 @@ TEST(Sha256_of_a_handle_leaves_the_file_locked_and_the_handle_open) {
     CloseHandle(file);
 
     // Opened the way the updater does: others may read (the loader), nobody may write, rename or delete.
-    HANDLE locked =
-        CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE locked = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                FILE_ATTRIBUTE_NORMAL, nullptr);
     CHECK(locked != INVALID_HANDLE_VALUE);
     CHECK_EQ(Sha256OfHandle(locked).value_or(""),
              std::string("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"));
@@ -228,8 +228,8 @@ TEST(Old_update_downloads_are_removed_but_not_the_current_one) {
     auto makeDownload = [&](const wchar_t* name) {
         const std::wstring dir = base + name;
         CreateDirectoryW(dir.c_str(), nullptr);
-        HANDLE file = CreateFileW((dir + L"\\sys-bar-9.9.9-setup.exe").c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                                  0, nullptr);
+        HANDLE file = CreateFileW((dir + L"\\sys-bar-9.9.9-setup.exe").c_str(), GENERIC_WRITE, 0, nullptr,
+                                  CREATE_ALWAYS, 0, nullptr);
         if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
         return dir;
     };

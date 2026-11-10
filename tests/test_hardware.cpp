@@ -4,22 +4,80 @@
 
 #include <algorithm>
 
-TEST(Disk_instance_names_are_parsed) {
-    int number = -1;
-    std::wstring letters;
-    CHECK(hw::ParseDiskInstance(L"0 C: E:", number, letters));
-    CHECK_EQ(number, 0);
-    CHECK_EQ(letters, std::wstring(L"C: E:"));
-    CHECK(hw::ParseDiskInstance(L"12 D:", number, letters));
-    CHECK_EQ(number, 12);
-    CHECK_EQ(letters, std::wstring(L"D:"));
-    CHECK(hw::ParseDiskInstance(L"3", number, letters));  // disk without letters
-    CHECK_EQ(number, 3);
-    CHECK_EQ(letters, std::wstring(L""));
-    CHECK(!hw::ParseDiskInstance(L"_Total", number, letters));
-    CHECK(!hw::ParseDiskInstance(L"", number, letters));
-    CHECK(!hw::ParseDiskInstance(nullptr, number, letters));
-    CHECK(!hw::ParseDiskInstance(L"99999 X:", number, letters));  // absurd
+TEST(Disk_activity_comes_from_the_growth_of_the_drive_counters) {
+    hw::DiskTotals before, now;
+    before.queryTime = 1'000'000'000;
+    before.idleTime = 500'000'000;
+    before.bytesRead = 10'000;
+    before.bytesWritten = 99'000;
+    now.queryTime = before.queryTime + 10'000'000;  // one second later
+    now.idleTime = before.idleTime + 7'500'000;     // idle for 75% of it
+    now.bytesRead = before.bytesRead + 4096;
+    now.bytesWritten = before.bytesWritten + 2'000'000;
+    hw::DiskActivity activity;
+    hw::ActivityBetween(before, now, activity);
+    CHECK_NEAR(activity.active, 25.0, 1e-9);
+    CHECK_EQ(activity.readBps, 4096ull);
+    CHECK_EQ(activity.writeBps, 2'000'000ull);
+
+    // Half a second: the same bytes are twice the rate.
+    now.queryTime = before.queryTime + 5'000'000;
+    now.idleTime = before.idleTime;  // busy all the time
+    hw::ActivityBetween(before, now, activity);
+    CHECK_NEAR(activity.active, 100.0, 1e-9);
+    CHECK_EQ(activity.readBps, 8192ull);
+
+    // More idle time than time (rounding in the driver) is still 0% active, never negative.
+    now.idleTime = before.idleTime + 6'000'000;
+    hw::ActivityBetween(before, now, activity);
+    CHECK_NEAR(activity.active, 0.0, 1e-9);
+
+    // No time passed, or counters that went backwards (the drive was replugged): nothing, not garbage.
+    hw::ActivityBetween(before, before, activity);
+    CHECK_EQ(activity.active, 0.0);
+    CHECK_EQ(activity.readBps, 0ull);
+    now = before;
+    now.queryTime += 10'000'000;
+    now.idleTime += 10'000'000;
+    now.bytesRead = 5;
+    now.bytesWritten = 7;
+    hw::ActivityBetween(before, now, activity);
+    CHECK_EQ(activity.readBps, 0ull);
+    CHECK_EQ(activity.writeBps, 0ull);
+}
+
+TEST(Disk_counters_list_the_system_drive_and_measure_it) {
+    hw::DiskCounters disks;
+    const ULONGLONG t0 = GetTickCount64();
+    const auto first = disks.Read(t0);
+    CHECK(!first.empty());  // every machine has a physical drive
+    wchar_t windows[MAX_PATH] = {};
+    GetWindowsDirectoryW(windows, MAX_PATH);
+    const std::wstring systemLetter = {windows[0], L':'};
+    bool systemDrive = false;
+    for (const auto& d : first) {
+        CHECK_EQ(d.active, 0.0);  // no previous reading yet
+        systemDrive |= d.letters.find(systemLetter) != std::wstring::npos;
+    }
+    CHECK(systemDrive);
+
+    Sleep(300);
+    const auto second = disks.Read(t0 + 300);
+    CHECK_EQ(second.size(), first.size());
+    for (const auto& d : second) {
+        CHECK(d.active >= 0.0 && d.active <= 100.0);
+        std::printf("      disk %d [%s]: %.1f%% active, read %llu B/s, write %llu B/s\n", d.number,
+                    t::Narrow(d.letters).c_str(), d.active, static_cast<unsigned long long>(d.readBps),
+                    static_cast<unsigned long long>(d.writeBps));
+    }
+
+    // After a pause the next reading covers the time since Prime(), not the pause.
+    disks.Prime(t0 + 400);
+    disks.Invalidate();  // and a rescan keeps the drives and their baselines
+    Sleep(200);
+    const auto third = disks.Read(t0 + 600);
+    CHECK_EQ(third.size(), first.size());
+    for (const auto& d : third) CHECK(d.active >= 0.0 && d.active <= 100.0);
 }
 
 TEST(Storage_devices_enumerate_without_admin) {

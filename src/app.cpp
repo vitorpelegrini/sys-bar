@@ -6,6 +6,7 @@
 #include "trayprobe.h"
 #include "version.h"
 
+#include <dbt.h>
 #include <objbase.h>
 #include <shellapi.h>
 #include <shlobj.h>
@@ -1853,6 +1854,10 @@ LRESULT App::HandleController(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_SYSCOLORCHANGE: RefreshTheme(true); return 0;
         case WM_DISPLAYCHANGE:
         case WM_DPICHANGED: RequestReposition(); return 0;
+        case WM_DEVICECHANGE:
+            // Broadcast to every top-level window when a device arrives or leaves (a USB drive, a card).
+            if (wp == DBT_DEVNODES_CHANGED) sampler_.DisksChanged();
+            return TRUE;
         case WM_POWERBROADCAST:
             if (wp == PBT_POWERSETTINGCHANGE) {
                 const auto* setting = reinterpret_cast<const POWERBROADCAST_SETTING*>(lp);

@@ -96,7 +96,7 @@ private:
     mutable std::mutex mutex_;
     std::optional<Release> latest_;
     std::wstring installerPath_;
-    std::atomic<ULONGLONG> installStarted_{0};  // tick of Install(): an installer that never closes us times out
+    std::atomic<ULONGLONG> installStarted_{0};     // tick of Install(): an installer that never closes us times out
     HANDLE installerFile_ = INVALID_HANDLE_VALUE;  // keeps the verified installer from being changed until it runs
     Cancel cancel_;
     std::thread worker_;
