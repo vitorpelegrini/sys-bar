@@ -361,6 +361,13 @@ float Card::TileDetailWidth() const {
     return TileWidth() - 2.0f * kTilePad;
 }
 
+void Card::ReleaseResources() {
+    target_.Reset();
+    brush_.Reset();
+    iconBrush_.Reset();
+    surface_.Release();
+}
+
 bool Card::EnsureTarget() {
     if (target_) return true;
     target_ = CreateDcTarget(gfx_.d2d());

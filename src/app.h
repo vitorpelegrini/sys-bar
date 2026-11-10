@@ -108,7 +108,7 @@ private:
     const wchar_t* RateUnit(int unit) const;               // KB/s, MB/s, GB/s
     std::wstring RateText(uint64_t bytesPerSecond) const;  // "4,2 MB/s" in the current language
     std::wstring FanRoleName(FanRole role, const std::wstring& name) const;
-    void UpdateAccessibleName();
+    std::wstring AccessibleName() const;  // what a screen reader is told the strip says
     void SetPaused(bool paused);
     bool AnimationsAllowed() const;
 
@@ -187,6 +187,6 @@ private:
     std::vector<ItemView> items_;
     std::vector<int> itemKeys_;  // tracks_ key of each item, for the animation frames
     std::wstring cpuDisplayName_;
-    std::wstring accessibleName_;
+    ULONGLONG lastReposition_ = 0;  // tick of the last Reposition(): the housekeeping pass skips a recent one
     wchar_t decimal_ = L'.';
 };

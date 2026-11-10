@@ -72,6 +72,8 @@ public:
     SIZE Measure(UINT dpi, const CardModel& model, int maxHeightPx = 0, int maxWidthPx = 0);
     // While the card is shown its width only grows (live values never make it jump); forget it when hidden.
     void ForgetWidth() { minWidth_ = 0.0f; }
+    // Frees the bitmap and the render target (recreated by the next Paint): for when the card is hidden.
+    void ReleaseResources();
     float SparkHeightDip() const { return sparkHeight_; }
     int ShadowMarginPx() const;
     float WidthDip() const { return width_; }

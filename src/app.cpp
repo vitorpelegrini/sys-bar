@@ -361,7 +361,6 @@ App::Taskbar* App::Attach(HWND tray, bool primary) {
         Log(L"CreateWindowEx(strip) failed: %lu", GetLastError());
         return nullptr;
     }
-    if (!accessibleName_.empty()) SetWindowTextW(t->bar, accessibleName_.c_str());
 
     // Layout changes of the taskbar windows are watched on their own thread (out of context).
     DWORD pid = 0;
@@ -426,9 +425,10 @@ void App::DetachAll(bool restoreTaskbar) {
         ShowWindow(cardWindow_, SW_HIDE);
         cardVisible_ = cardWanted_ = false;
         cardAlpha_ = 0.0f;
+        card_.ForgetWidth();
+        card_.ReleaseResources();
     }
     hoverBar_ = pressedBar_ = noticeBar_ = nullptr;
-    accessibleName_.clear();
 }
 
 bool App::IsAttached(const Taskbar& t) const {
@@ -522,6 +522,7 @@ void App::RequestReposition() {
 void App::Reposition() {
     repositionPending_ = false;
     if (quitting_ || !snapshot_.valid || displayOff_ || locked_) return;
+    lastReposition_ = GetTickCount64();
     // Moving Explorer's windows is a synchronous cross-thread call: messages sent to us meanwhile (an
     // Explorer restart, a setting change) must not rebuild bars_ under our feet. Run once more later.
     if (inTaskbarWork_) {
@@ -836,15 +837,12 @@ void App::RenderBar(Taskbar& t, bool force) {
     t.renderer->Present(t.bar);
 }
 
-void App::UpdateAccessibleName() {
-    // Screen readers (Narrator) read the window text of the strip.
-    if (bars_.empty()) return;
+// Screen readers (Narrator) read the window text of the strip. It is built when they ask (WM_GETTEXT) rather
+// than set on every sample, which would also broadcast a name-change event every second.
+std::wstring App::AccessibleName() const {
     std::wstring name = L"sys-bar";
     for (const ItemView& item : items_) name += L" · " + item.label + L" " + item.strong + item.weak;
-    if (name != accessibleName_) {
-        accessibleName_ = name;
-        for (const auto& t : bars_) SetWindowTextW(t->bar, name.c_str());
-    }
+    return name;
 }
 
 bool App::AnimationsAllowed() const {
@@ -906,7 +904,6 @@ void App::OnSample() {
     }
 
     Reposition();
-    UpdateAccessibleName();
     if (cardVisible_) {
         sensorDetail_.Raise();  // fans are on screen: the service keeps them at full rate
         UpdateCard(false);
@@ -971,11 +968,14 @@ void App::ApplyLanguage() {
 void App::SetPaused(bool paused) {
     sampler_.SetPaused(paused);
     if (paused) {
+        // Display off or session locked: not a single wake-up until it is back.
+        KillTimer(controller_, kHousekeepingTimer);
         KillTimer(controller_, kAnimationTimer);
         animating_ = false;
         for (auto& [key, track] : tracks_) track.shown = track.target;
         HideCard();
     } else {
+        SetCoalescableTimer(controller_, kHousekeepingTimer, kHousekeepingMs, nullptr, kHousekeepingToleranceMs);
         RequestReposition();
     }
 }
@@ -1284,6 +1284,7 @@ void App::OnCardFadeTick() {
         ShowWindow(cardWindow_, SW_HIDE);
         cardVisible_ = false;
         card_.ForgetWidth();
+        card_.ReleaseResources();  // megabytes of bitmap that are only needed while it is on screen
         return;
     }
     PresentCard();  // only re-presents the painted bitmap with a new alpha/position (cheap)
@@ -1822,10 +1823,10 @@ LRESULT App::HandleController(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_TIMER:
             switch (wp) {
                 case kHousekeepingTimer:
-                    if (!displayOff_ && !locked_) {
-                        RefreshTheme(false);
-                        Reposition();
-                    }
+                    // The safety net for what no event reported. Every sample repositions too, so with the
+                    // usual one-second interval this pass has nothing left to do.
+                    RefreshTheme(false);
+                    if (GetTickCount64() - lastReposition_ >= kHousekeepingMs) Reposition();
                     break;
                 case kAnimationTimer: OnAnimationTick(); break;
                 case kCardDelayTimer:
@@ -1891,6 +1892,16 @@ LRESULT App::HandleController(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 LRESULT App::HandleBar(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_MOUSEACTIVATE: return MA_NOACTIVATE;  // never steal focus from the app in use
+        case WM_GETTEXTLENGTH: return static_cast<LRESULT>(AccessibleName().size());
+        case WM_GETTEXT: {
+            auto* buffer = reinterpret_cast<wchar_t*>(lp);
+            if (!buffer || wp == 0) return 0;
+            const std::wstring name = AccessibleName();
+            const size_t length = std::min(name.size(), static_cast<size_t>(wp) - 1);
+            std::copy_n(name.data(), length, buffer);
+            buffer[length] = L'\0';
+            return static_cast<LRESULT>(length);
+        }
         case WM_MOUSEMOVE: {
             Taskbar* t = FindBar(hwnd);
             if (!t) return 0;
