@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using LibreHardwareMonitor.Hardware;
-using Microsoft.Win32;
+using Microsoft.Win32.SafeHandles;
 
 namespace SysBar.Sensors
 {
@@ -22,23 +22,23 @@ namespace SysBar.Sensors
         private TimeSpan _lastGpuUpdate = TimeSpan.FromDays(-1);
         private TimeSpan _lastFanUpdate = TimeSpan.FromDays(-1);
 
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security,
+            uint disposition, uint flags, IntPtr template);
+
         /// <summary>
-        /// Whether PawnIO can be used: LibreHardwareMonitor finds PawnIOLib.dll through PawnIO's uninstall entry.
-        /// Uninstalling PawnIO removes that folder but may leave the driver registered, so the driver alone
-        /// does not tell.
+        /// Whether the PawnIO driver can be reached. LibreHardwareMonitor talks to its device directly, so the
+        /// device is what tells: the driver's registration and its files do not (an uninstalled PawnIO keeps its
+        /// driver registered but no longer loaded after a restart, and another program may install it again
+        /// while this service runs).
         /// </summary>
         public static bool PawnIoReady()
         {
-            try
-            {
-                using RegistryKey? key = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\PawnIO");
-                return key?.GetValue("InstallLocation") is string folder && folder.Length > 0 &&
-                       File.Exists(Path.Combine(folder, "PawnIOLib.dll"));
-            }
-            catch (Exception)
-            {
-                return false;
-            }
+            const uint shareReadWrite = 3, openExisting = 3;
+            const int accessDenied = 5;  // it exists, we may just not open it (not running as SYSTEM)
+            using SafeFileHandle device = CreateFileW(@"\\?\GLOBALROOT\Device\PawnIO", 0, shareReadWrite, IntPtr.Zero,
+                openExisting, 0, IntPtr.Zero);
+            return !device.IsInvalid || Marshal.GetLastWin32Error() == accessDenied;
         }
 
         /// <summary>

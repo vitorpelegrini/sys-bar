@@ -76,13 +76,16 @@ namespace SysBar.Sensors
             return data;
         }
 
-        /// <summary>Writes through a temporary file and a rename, so a reader never sees half a file.</summary>
+        /// <summary>
+        /// Writes through a temporary file that then takes the place of the old one in a single step: a reader
+        /// never sees half a file, and a failure in between never leaves the file missing.
+        /// </summary>
         public static void WriteAtomic(string path, byte[] data)
         {
             string temp = path + ".new";
             File.WriteAllBytes(temp, data);
-            if (File.Exists(path)) File.Delete(path);
-            File.Move(temp, path);
+            if (File.Exists(path)) File.Replace(temp, path, null);
+            else File.Move(temp, path);
         }
     }
 }
