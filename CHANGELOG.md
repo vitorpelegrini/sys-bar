@@ -23,8 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The card's bitmap and render target (4 to 7 MB) are freed when it closes. While it is open, its shadow
     and body are drawn once and reused, and an update costs about a fifth less.
   - With the display off or the session locked sys-bar no longer wakes up at all, and the sensors service
-    sleeps until it is asked instead of waking every second: with sys-bar closed it uses no CPU. Its memory
-    in use went from 38 to 28 MB (committed: 81 to 51 MB).
+    sleeps until it is asked instead of waking every second: with sys-bar closed it uses no CPU.
+  - The sensors service went from 38 to 25 MB of memory in use (committed: 81 to 51 MB) and from 0.31% to
+    0.23% of one core. It gives back what detecting the hardware allocated, and collects its garbage twice a
+    minute: on a processor with a large cache .NET would otherwise let it pile up for minutes.
   - The executable is 90 KB smaller.
 - A card reader without a card is not listed as a disk.
 - The strip's text for screen readers is answered when asked for, instead of being announced as a name change

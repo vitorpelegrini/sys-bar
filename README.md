@@ -108,8 +108,8 @@ Right-click it for everything else.
 
   | | sys-bar | Sensors service (optional) | Together |
   | --- | --- | --- | --- |
-  | CPU | 0.36% of one core | 0.21% of one core | **0.02% of the machine** |
-  | Memory | 18 MB (4 MB private) | 28 MB (19 MB private) | **47 MB** |
+  | CPU | 0.36% of one core | 0.23% of one core | **0.02% of the machine** |
+  | Memory | 18 MB (4 MB private) | 25 MB (15 MB private) | **43 MB** |
   | GPU | 0.01% | 0% | **0.01%** |
   | Disk | 0 bytes read or written | 0 bytes | **0 bytes** |
 

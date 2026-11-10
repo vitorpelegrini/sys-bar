@@ -19,6 +19,7 @@ namespace SysBar.Sensors
         private static readonly TimeSpan EventRetry = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan DetailWindow = TimeSpan.FromSeconds(3);  // sys-bar signals every second
         private static readonly TimeSpan PawnIoCheck = TimeSpan.FromSeconds(30);   // opened without PawnIO: is it back?
+        private static readonly TimeSpan CollectInterval = TimeSpan.FromSeconds(30);
 
         private readonly ManualResetEvent _stop = new ManualResetEvent(false);
         private readonly ManualResetEvent _never = new ManualResetEvent(false);  // stands in for a missing event
@@ -86,6 +87,7 @@ namespace SysBar.Sensors
                 TimeSpan lastWanted = Log.ToConsole ? clock.Elapsed : never;
                 TimeSpan lastRead = never, lastDetail = never, lastFansOnly = never, lastOnDemand = never;
                 TimeSpan lastPawnIoCheck = never;
+                TimeSpan lastCollect = clock.Elapsed;
 
                 WaitHandle[]? handles = null;
                 while (true)
@@ -160,6 +162,15 @@ namespace SysBar.Sensors
                             bool fansShown = now - lastOnDemand >= ActiveWindow || now - lastDetail < DetailWindow;
                             var (cpu, readings) = reader.Read(fansShown, fansOnly);
                             block.Publish(cpu, readings);
+                            if (now - lastCollect >= CollectInterval)
+                            {
+                                // The hardware library allocates on every reading, and the collector sizes
+                                // its budget by the CPU cache: on a large processor it lets tens of megabytes
+                                // pile up before running on its own. A collection now and then takes a few
+                                // milliseconds and keeps the service small.
+                                lastCollect = now;
+                                GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+                            }
                             if (reader.OpenedWithoutPawnIo && now - lastPawnIoCheck >= PawnIoCheck)
                             {
                                 lastPawnIoCheck = now;

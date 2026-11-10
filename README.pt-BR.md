@@ -110,8 +110,8 @@ Gerenciador de Tarefas. Botão direito para todo o resto.
 
   | | sys-bar | Serviço de sensores (opcional) | Juntos |
   | --- | --- | --- | --- |
-  | CPU | 0,36% de um núcleo | 0,21% de um núcleo | **0,02% da máquina** |
-  | Memória | 18 MB (4 MB exclusivos) | 28 MB (19 MB exclusivos) | **47 MB** |
+  | CPU | 0,36% de um núcleo | 0,23% de um núcleo | **0,02% da máquina** |
+  | Memória | 18 MB (4 MB exclusivos) | 25 MB (15 MB exclusivos) | **43 MB** |
   | GPU | 0,01% | 0% | **0,01%** |
   | Disco | 0 bytes lidos ou gravados | 0 bytes | **0 bytes** |
 
