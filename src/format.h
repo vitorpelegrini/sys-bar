@@ -59,7 +59,7 @@ std::vector<std::wstring> SplitParts(std::wstring_view text);
 // A translated "A · B" text as icon chips (icons in order); unchanged if the parts do not match.
 std::wstring IconParts(const std::wstring& text, std::initializer_list<wchar_t> icons);
 
-// First drive letter of a PDH disk instance in alphabetical order: "E: C:" -> "C:"; "" when none.
+// First drive letter of a disk in alphabetical order: "E: C:" -> "C:"; "" when none.
 std::wstring FirstDriveLetter(std::wstring_view letters);
 
 }  // namespace text

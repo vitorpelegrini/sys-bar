@@ -47,7 +47,7 @@
 
 Task Manager tells you everything, but only once you open it. Desktop widgets and overlays get covered by
 windows or cover them. sys-bar puts the numbers you glance at all day **inside the taskbar itself**, next to
-the clock: always visible, never in the way, and costing about half a percent of one CPU core.
+the clock: always visible, never in the way, and costing about a third of a percent of one CPU core.
 
 Hover it for a detailed card with one-minute graphs, temperatures and fans. Click it for Task Manager.
 Right-click it for everything else.
@@ -108,14 +108,16 @@ Right-click it for everything else.
 
   | | sys-bar | Sensors service (optional) | Together |
   | --- | --- | --- | --- |
-  | CPU | 0.55% of one core | 0.27% of one core | **0.02% of the machine** |
-  | Memory | 24 MB (9 MB private) | 52 MB (25 MB private) | **76 MB** |
+  | CPU | 0.36% of one core | 0.23% of one core | **0.02% of the machine** |
+  | Memory | 18 MB (4 MB private) | 25 MB (15 MB private) | **43 MB** |
   | GPU | 0.01% | 0% | **0.01%** |
   | Disk | 0 bytes read or written | 0 bytes | **0 bytes** |
 
-  Animation frames repaint only the bars that moved (a few microseconds each), the network is read through
-  the adapters in use rather than the whole interface table, and fans, which only the card shows, are read
-  at full rate only while it is open.
+  Counters are read with one low-level call per second instead of through PDH (which alone would take more
+  memory than all of sys-bar), Direct2D draws straight into the strip's bitmap, animation frames repaint only
+  the bars that moved (a few microseconds each), and fans, which only the card shows, are read at full rate
+  only while it is open. With the display off or the session locked, sys-bar does not wake up at all, and
+  with sys-bar closed the service uses no CPU.
 - **Survives the real world**: Explorer restarts, driver resets, sleep and resume, DPI and display changes,
   monitors coming and going, drives plugged in and ejected.
 - **Updates itself** from GitHub Releases, verified before anything runs (see

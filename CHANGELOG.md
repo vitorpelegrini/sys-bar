@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-11-09
+
+### Changed
+
+- Less of everything, same pixels and same numbers. Measured against 1.0.2 on the same 36-thread desktop, one
+  after the other, card closed: CPU 0.48% → 0.31% of one core, memory in use 39 → 18 MB, private memory
+  26 → 7 MB.
+  - Counters are read without PDH, which loads its counter-name tables for the first counter it is given
+    (more memory than the rest of sys-bar together). CPU utility, GPU engines and GPU memory come from the
+    lower-level performance counter API with one call per sample, and disk activity straight from the disk
+    driver, the source of those PDH counters. The CPU figure is checked against PDH in the tests.
+  - Direct2D draws straight into the strip's and the card's bitmaps. The previous render target copied the
+    whole bitmap into Direct2D and back on every pass, which cost more than the drawing itself.
+  - The card's bitmap and render target (4 to 7 MB) are freed when it closes. While it is open, its shadow
+    and body are drawn once and reused, and an update costs about a fifth less.
+  - With the display off or the session locked sys-bar no longer wakes up at all, and the sensors service
+    sleeps until it is asked instead of waking every second: with sys-bar closed it uses no CPU.
+  - The sensors service went from 38 to 25 MB of memory in use (committed: 81 to 51 MB) and from 0.31% to
+    0.23% of one core. It gives back what detecting the hardware allocated, and collects its garbage twice a
+    minute: on a processor with a large cache .NET would otherwise let it pile up for minutes.
+  - The executable is 90 KB smaller.
+- A card reader without a card is not listed as a disk.
+- The strip's text for screen readers is answered when asked for, instead of being announced as a name change
+  every second.
+
+### Fixed
+
+- Self-update: the downloaded installer was meant to stay locked from the moment its SHA-256 was checked
+  until it ran, but the check itself released the lock. It now holds.
+- Self-update: installers of earlier updates were left in the temporary folder (7 MB each); they are removed.
+- Self-update: an installer that never took over (blocked or crashed) stopped every later update check.
+- The card no longer reports "update failed" when a daily check merely could not reach GitHub (offline).
+- Sensors: whether PawnIO is usable is now decided by opening its device, which is what the hardware library
+  does; 1.0.2 looked for its files instead. A PawnIO whose driver only loads after a restart no longer fails
+  the installation of the service.
+- A notice asked for from the menu of another monitor's strip showed above the main one.
+- Task Manager and the sensors uninstaller are started by their full path in the system folders.
+
 ## [1.0.2] - 2026-10-22
 
 ### Fixed
@@ -115,7 +153,8 @@ First public release.
   rollback, and backs off for a day after a failed update.
 - No telemetry: the only network traffic is the update check, which can be turned off.
 
-[Unreleased]: https://github.com/vitorpelegrini/sys-bar/compare/v1.0.2...HEAD
+[Unreleased]: https://github.com/vitorpelegrini/sys-bar/compare/v1.0.3...HEAD
+[1.0.3]: https://github.com/vitorpelegrini/sys-bar/compare/v1.0.2...v1.0.3
 [1.0.2]: https://github.com/vitorpelegrini/sys-bar/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/vitorpelegrini/sys-bar/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/vitorpelegrini/sys-bar/releases/tag/v1.0.0

@@ -57,6 +57,33 @@ TEST(CleanCpuName_removes_marketing_noise) {
              std::wstring(L"Snapdragon X Elite - X1E78100 - Qualcomm Oryon"));
 }
 
+TEST(CleanCpuName_only_removes_whole_words_and_exact_patterns) {
+    // The results of the regular expressions this function used to be written with.
+    const std::pair<const wchar_t*, const wchar_t*> cases[] = {
+        {L"AMD FX(tm)-8350 Eight-Core Processor", L"AMD FX-8350 Eight-Core"},
+        {L"Intel(R) Celeron(R) CPU  N3350 @ 1.10GHz", L"Intel Celeron N3350"},
+        {L"Intel(R) Core(TM) Ultra 7 155H", L"Intel Core Ultra 7 155H"},
+        {L"AMD Ryzen Threadripper PRO 5995WX 64-Cores", L"AMD Ryzen Threadripper PRO 5995WX 64-Cores"},
+        {L"QEMU Virtual CPU version 2.5+", L"QEMU Virtual version 2.5+"},
+        {L"AMD EPYC 7763 64-Core Processor", L"AMD EPYC 7763"},
+        {L"Intel(R) Processor N100", L"Intel N100"},
+        {L"cpu lowercase processor", L"lowercase"},
+        {L"CPUID family 6 CPU", L"CPUID family 6"},  // "CPU" inside a word stays
+        {L"12-core processor test", L"test"},
+        {L"Intel(r) Atom(tm) x5-Z8350  CPU @ 1.44GHz", L"Intel Atom x5-Z8350"},
+        {L"AMD Ryzen 5 3600 6-Core Processor  with  spaces", L"AMD Ryzen 5 3600 with spaces"},
+        {L"Weird (R)(TM) (tm) (X) name", L"Weird (X) name"},
+        {L"VIA Nano processor U2250 (1.6GHz Capable)", L"VIA Nano U2250 (1.6GHz Capable)"},
+        {L"tab\tseparated\t\tCPU", L"tab\tseparated"},  // a single tab is kept, a run becomes one space
+        {L"16-Core  Processor", L"16-Core"},            // two spaces: only "Processor" goes
+        {L"A 16-CoreProcessor B", L"A 16-CoreProcessor B"},
+        {L"x16-Core Processor", L"x16-Core"},  // not a number on its own
+        {L"Processor", L"Processor"},          // nothing would be left: the name as it came
+        {L"8-Core Processor", L"8-Core Processor"},
+    };
+    for (const auto& [raw, expected] : cases) CHECK_EQ(CleanCpuName(raw), std::wstring(expected));
+}
+
 TEST(CleanCpuName_never_returns_empty_for_non_empty_input) {
     CHECK_EQ(CleanCpuName(L"CPU"), std::wstring(L"CPU"));
     CHECK_EQ(CleanCpuName(L""), std::wstring(L""));

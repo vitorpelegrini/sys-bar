@@ -2,8 +2,6 @@
 
 #include "metrics.h"
 
-#include <pdhmsg.h>
-
 #include <deque>
 #include <limits>
 
@@ -11,35 +9,26 @@ namespace {
 
 const std::wstring kTag = L"luid_0x00000000_0x0005e13d";
 
-// Builds an array in the format PDH returns.
+// Builds the items the sampler hands to the aggregation.
 struct Items {
     std::deque<std::wstring> names;  // deque: stable addresses
-    std::vector<PDH_FMT_COUNTERVALUE_ITEM_W> items;
+    std::vector<CounterItem> items;
 
-    void Engine(int pid, const std::wstring& luid, int eng, const wchar_t* type, double value,
-                DWORD status = PDH_CSTATUS_VALID_DATA) {
+    void Engine(int pid, const std::wstring& luid, int eng, const wchar_t* type, double value, bool valid = true) {
         Raw(L"pid_" + std::to_wstring(pid) + L"_" + luid + L"_phys_0_eng_" + std::to_wstring(eng) + L"_engtype_" + type,
-            value, status);
+            value, valid);
     }
-    void Raw(const std::wstring& name, double value, DWORD status = PDH_CSTATUS_VALID_DATA) {
+    void Raw(const std::wstring& name, double value, bool valid = true) {
         names.push_back(name);
-        PDH_FMT_COUNTERVALUE_ITEM_W item{};
-        item.szName = names.back().data();
-        item.FmtValue.CStatus = status;
-        item.FmtValue.doubleValue = value;
-        items.push_back(item);
+        items.push_back({names.back().data(), value, 0, valid});
     }
-    void Memory(const std::wstring& name, LONGLONG bytes, DWORD status = PDH_CSTATUS_VALID_DATA) {
+    void Memory(const std::wstring& name, uint64_t bytes, bool valid = true) {
         names.push_back(name);
-        PDH_FMT_COUNTERVALUE_ITEM_W item{};
-        item.szName = names.back().data();
-        item.FmtValue.CStatus = status;
-        item.FmtValue.largeValue = bytes;
-        items.push_back(item);
+        items.push_back({names.back().data(), 0.0, bytes, valid});
     }
     GpuEngineResult Aggregate(const std::wstring& tag = kTag) {
         std::unordered_map<std::wstring_view, double> scratch;
-        return AggregateGpuEngines(items.data(), static_cast<DWORD>(items.size()), tag, scratch);
+        return AggregateGpuEngines(items.data(), items.size(), tag, scratch);
     }
 };
 
@@ -80,7 +69,7 @@ TEST(Gpu_is_capped_at_100) {
 
 TEST(Gpu_discards_invalid_data) {
     Items in;
-    in.Engine(1, kTag, 0, L"3D", 80.0, PDH_CSTATUS_INVALID_DATA);
+    in.Engine(1, kTag, 0, L"3D", 80.0, false);
     in.Engine(2, kTag, 0, L"3D", std::numeric_limits<double>::quiet_NaN());
     in.Engine(3, kTag, 0, L"3D", -5.0);
     in.Engine(4, kTag, 0, L"3D", 7.0);
@@ -112,9 +101,9 @@ TEST(Vram_sums_only_the_chosen_adapter) {
     in.Memory(kTag + L"_phys_0", 2'000'000'000);
     in.Memory(kTag + L"_phys_1", 500'000'000);
     in.Memory(L"luid_0x00000000_0x00064563_phys_0", 7'000'000'000);
-    in.Memory(kTag + L"_phys_2", 999, PDH_CSTATUS_INVALID_DATA);
+    in.Memory(kTag + L"_phys_2", 999, false);
     bool saw = false;
-    const uint64_t used = SumAdapterMemory(in.items.data(), static_cast<DWORD>(in.items.size()), kTag, saw);
+    const uint64_t used = SumAdapterMemory(in.items.data(), in.items.size(), kTag, saw);
     CHECK(saw);
     CHECK_EQ(used, 2'500'000'000ull);
 }

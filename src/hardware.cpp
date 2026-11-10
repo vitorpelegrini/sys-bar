@@ -208,6 +208,169 @@ const wchar_t* DiskKindName(DiskKind kind) {
     }
 }
 
+// ---- Disk activity --------------------------------------------------------------------------------
+
+namespace {
+
+constexpr ULONGLONG kDiskRescanMs = 5'000;
+constexpr int kMaxDriveNumber = 64;
+constexpr int kDriveGapLimit = 16;  // numbers are handed out from 0: this many misses in a row end the search
+
+bool ReadTotals(HANDLE drive, DiskTotals& out) {
+    DISK_PERFORMANCE performance{};
+    DWORD bytes = 0;
+    // FILE_ANY_ACCESS: works on a handle opened without access rights, and without administrator rights.
+    if (!DeviceIoControl(drive, IOCTL_DISK_PERFORMANCE, nullptr, 0, &performance, sizeof(performance), &bytes,
+                         nullptr) ||
+        bytes < offsetof(DISK_PERFORMANCE, StorageDeviceNumber)) {
+        return false;
+    }
+    out.idleTime = performance.IdleTime.QuadPart;
+    out.queryTime = performance.QueryTime.QuadPart;
+    out.bytesRead = performance.BytesRead.QuadPart;
+    out.bytesWritten = performance.BytesWritten.QuadPart;
+    return true;
+}
+
+// A card reader without a card is a drive with nothing in it: not listed. Only asked of drives with
+// removable media, so nothing is ever sent to a fixed (possibly sleeping) disk.
+bool HasMedia(HANDLE drive) {
+    STORAGE_PROPERTY_QUERY query{StorageDeviceProperty, PropertyStandardQuery, {0}};
+    alignas(8) BYTE buffer[512] = {};
+    DWORD bytes = 0;
+    if (!DeviceIoControl(drive, IOCTL_STORAGE_QUERY_PROPERTY, &query, sizeof(query), buffer, sizeof(buffer), &bytes,
+                         nullptr) ||
+        bytes < sizeof(STORAGE_DEVICE_DESCRIPTOR)) {
+        return true;  // cannot tell: keep it
+    }
+    if (!reinterpret_cast<const STORAGE_DEVICE_DESCRIPTOR*>(buffer)->RemovableMedia) return true;
+    return DeviceIoControl(drive, IOCTL_STORAGE_CHECK_VERIFY2, nullptr, 0, nullptr, 0, &bytes, nullptr) != FALSE;
+}
+
+// Drive letters of each physical drive number: "C: E:".
+std::unordered_map<int, std::wstring> DriveLetters() {
+    std::unordered_map<int, std::wstring> letters;
+    const DWORD mask = GetLogicalDrives();
+    for (int i = 0; i < 26; ++i) {
+        if (!(mask & (1u << i))) continue;
+        const wchar_t letter = static_cast<wchar_t>(L'A' + i);
+        const wchar_t root[] = {letter, L':', L'\\', L'\0'};
+        const UINT type = GetDriveTypeW(root);
+        if (type != DRIVE_FIXED && type != DRIVE_REMOVABLE) continue;  // not network, optical or RAM drives
+        const wchar_t volume[] = {L'\\', L'\\', L'.', L'\\', letter, L':', L'\0'};
+        const HANDLE file =
+            CreateFileW(volume, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (file == INVALID_HANDLE_VALUE) continue;
+        // A volume usually sits on one disk; spanned and striped volumes list every disk they use.
+        alignas(8) BYTE buffer[sizeof(VOLUME_DISK_EXTENTS) + 31 * sizeof(DISK_EXTENT)] = {};
+        DWORD bytes = 0;
+        if (DeviceIoControl(file, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, nullptr, 0, buffer, sizeof(buffer), &bytes,
+                            nullptr) &&
+            bytes >= offsetof(VOLUME_DISK_EXTENTS, Extents)) {
+            const auto* extents = reinterpret_cast<const VOLUME_DISK_EXTENTS*>(buffer);
+            const DWORD fits =
+                (bytes - static_cast<DWORD>(offsetof(VOLUME_DISK_EXTENTS, Extents))) / sizeof(DISK_EXTENT);
+            for (DWORD e = 0; e < extents->NumberOfDiskExtents && e < fits; ++e) {
+                std::wstring& text = letters[static_cast<int>(extents->Extents[e].DiskNumber)];
+                const wchar_t entry[] = {letter, L':', L'\0'};
+                if (text.find(entry) != std::wstring::npos) continue;  // two extents on the same disk
+                if (!text.empty()) text += L' ';
+                text += entry;
+            }
+        }
+        CloseHandle(file);
+    }
+    return letters;
+}
+
+}  // namespace
+
+void ActivityBetween(const DiskTotals& before, const DiskTotals& now, DiskActivity& out) {
+    out.active = 0.0;
+    out.readBps = out.writeBps = 0;
+    const double elapsed = static_cast<double>(now.queryTime - before.queryTime);  // 100 ns units
+    if (elapsed <= 0.0) return;
+    const double idle = std::clamp(static_cast<double>(now.idleTime - before.idleTime) / elapsed, 0.0, 1.0);
+    out.active = 100.0 * (1.0 - idle);
+    const double seconds = elapsed / 1e7;
+    // A counter that went backwards was reset (the drive was replugged): no rate for this round.
+    if (now.bytesRead >= before.bytesRead) {
+        out.readBps = static_cast<uint64_t>(static_cast<double>(now.bytesRead - before.bytesRead) / seconds);
+    }
+    if (now.bytesWritten >= before.bytesWritten) {
+        out.writeBps = static_cast<uint64_t>(static_cast<double>(now.bytesWritten - before.bytesWritten) / seconds);
+    }
+}
+
+void DiskCounters::Scan(ULONGLONG tickMs) {
+    nextScan_ = tickMs + kDiskRescanMs;
+    std::vector<Drive> found;
+    int misses = 0;
+    for (int number = 0; number < kMaxDriveNumber && misses < kDriveGapLimit; ++number) {
+        const HANDLE file = OpenDrive(number);
+        if (file == INVALID_HANDLE_VALUE) {
+            ++misses;
+            continue;
+        }
+        misses = 0;
+        const bool usable = HasMedia(file);
+        CloseHandle(file);
+        if (!usable) continue;
+        Drive drive;
+        drive.number = number;
+        // A drive already known keeps its counters, so its rates carry on across the scan.
+        for (const Drive& known : drives_) {
+            if (known.number == number) drive = known;
+        }
+        drive.letters.clear();
+        found.push_back(std::move(drive));
+    }
+    if (!found.empty()) {
+        std::unordered_map<int, std::wstring> letters = DriveLetters();
+        for (Drive& drive : found) drive.letters = std::move(letters[drive.number]);
+    }
+    drives_ = std::move(found);
+}
+
+std::vector<DiskActivity> DiskCounters::Sample(ULONGLONG tickMs, bool report) {
+    if (rescan_.exchange(false) || tickMs >= nextScan_) Scan(tickMs);
+    std::vector<DiskActivity> out;
+    for (Drive& drive : drives_) {
+        DiskTotals now;
+        const HANDLE file = OpenDrive(drive.number);
+        const bool ok = file != INVALID_HANDLE_VALUE && ReadTotals(file, now);
+        if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+        if (!ok) {
+            rescan_ = true;  // unplugged, or its media was taken out: the next round lists the drives again
+            drive.primed = false;
+            continue;
+        }
+        if (report) {
+            DiskActivity activity;
+            activity.number = drive.number;
+            activity.letters = drive.letters;
+            if (drive.primed) ActivityBetween(drive.last, now, activity);
+            out.push_back(std::move(activity));
+        }
+        drive.last = now;
+        drive.primed = true;
+    }
+    return out;
+}
+
+std::vector<DiskActivity> DiskCounters::Read(ULONGLONG tickMs) {
+    return Sample(tickMs, true);
+}
+
+void DiskCounters::Prime(ULONGLONG tickMs) {
+    Sample(tickMs, false);
+}
+
+void DiskCounters::Close() {
+    drives_.clear();
+    rescan_ = true;
+}
+
 // ---- Network --------------------------------------------------------------------------------------
 
 namespace {
@@ -451,19 +614,6 @@ BatteryReading BatteryMeter::Read() {
     }
     if (known && std::abs(milliwatts) < 500'000.0) reading.watts = milliwatts / 1000.0;
     return reading;
-}
-
-bool ParseDiskInstance(const wchar_t* name, int& number, std::wstring& letters) {
-    if (!name || !std::iswdigit(*name)) return false;  // also rejects "_Total"
-    number = 0;
-    const wchar_t* p = name;
-    while (std::iswdigit(*p)) {
-        number = number * 10 + (*p - L'0');
-        if (number > 9999) return false;
-        ++p;
-    }
-    letters = text::Trim(p);
-    return true;
 }
 
 }  // namespace hw

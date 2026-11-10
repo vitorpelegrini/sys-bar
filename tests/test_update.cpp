@@ -161,6 +161,36 @@ TEST(Sha256_of_a_file_matches_a_known_digest) {
     CHECK(!Sha256OfFile(L"Z:\\does\\not\\exist.bin"));
 }
 
+TEST(Sha256_of_a_handle_leaves_the_file_locked_and_the_handle_open) {
+    // Regression: hashing closed the handle, so the downloaded installer was no longer locked between the
+    // check and its launch, and the updater later closed a handle value that was not its own anymore.
+    wchar_t temp[MAX_PATH];
+    GetTempPathW(MAX_PATH, temp);
+    const std::wstring path = std::wstring(temp) + L"sysbar-sha-lock-test.txt";
+    HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, 0, nullptr);
+    DWORD written = 0;
+    WriteFile(file, "test", 4, &written, nullptr);
+    CloseHandle(file);
+
+    // Opened the way the updater does: others may read (the loader), nobody may write, rename or delete.
+    HANDLE locked = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                FILE_ATTRIBUTE_NORMAL, nullptr);
+    CHECK(locked != INVALID_HANDLE_VALUE);
+    CHECK_EQ(Sha256OfHandle(locked).value_or(""),
+             std::string("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"));
+    LARGE_INTEGER size{};
+    CHECK(GetFileSizeEx(locked, &size) && size.QuadPart == 4);  // still a live handle
+    CHECK_EQ(Sha256OfHandle(locked).value_or(""),               // and it can be hashed again, from the start
+             std::string("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"));
+    HANDLE writer = CreateFileW(path.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+                                0, nullptr);
+    CHECK(writer == INVALID_HANDLE_VALUE);  // nobody can change the file meanwhile
+    if (writer != INVALID_HANDLE_VALUE) CloseHandle(writer);
+    CHECK(!DeleteFileW(path.c_str()));
+    CHECK(CloseHandle(locked) != FALSE);  // ours to close, exactly once
+    CHECK(DeleteFileW(path.c_str()) != FALSE);
+}
+
 TEST(Updater_checks_a_real_github_release) {
     // Uses a public project with semantic-version releases to exercise WinHTTP, TLS, JSON and the state
     // machine end to end. Offline machines skip it.
@@ -188,4 +218,36 @@ TEST(Updater_checks_a_real_github_release) {
         CHECK(updater.state() == State::Available);
     }
     DestroyWindow(sink);
+}
+
+TEST(Old_update_downloads_are_removed_but_not_the_current_one) {
+    wchar_t temp[MAX_PATH];
+    GetTempPathW(MAX_PATH, temp);
+    const std::wstring base = std::wstring(temp) + L"sysbar-cleanup-test\\";
+    CreateDirectoryW(base.c_str(), nullptr);
+    auto makeDownload = [&](const wchar_t* name) {
+        const std::wstring dir = base + name;
+        CreateDirectoryW(dir.c_str(), nullptr);
+        HANDLE file = CreateFileW((dir + L"\\sys-bar-9.9.9-setup.exe").c_str(), GENERIC_WRITE, 0, nullptr,
+                                  CREATE_ALWAYS, 0, nullptr);
+        if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
+        return dir;
+    };
+    auto exists = [](const std::wstring& path) { return GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES; };
+    const std::wstring old1 = makeDownload(L"sys-bar-update-11111111");
+    const std::wstring old2 = makeDownload(L"sys-bar-update-22222222");
+    const std::wstring current = makeDownload(L"sys-bar-update-33333333");
+    const std::wstring unrelated = makeDownload(L"something-else");
+
+    CHECK_EQ(RemoveOldDownloads(base, current), 2);
+    CHECK(!exists(old1));
+    CHECK(!exists(old2));
+    CHECK(exists(current + L"\\sys-bar-9.9.9-setup.exe"));    // being installed: kept
+    CHECK(exists(unrelated + L"\\sys-bar-9.9.9-setup.exe"));  // not ours: never touched
+
+    CHECK_EQ(RemoveOldDownloads(base, L""), 1);  // nothing to keep anymore
+    CHECK(!exists(current));
+    DeleteFileW((unrelated + L"\\sys-bar-9.9.9-setup.exe").c_str());
+    RemoveDirectoryW(unrelated.c_str());
+    RemoveDirectoryW(base.c_str());
 }

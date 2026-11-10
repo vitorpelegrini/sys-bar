@@ -217,11 +217,13 @@ namespace SysBar.Sensors
             {
                 try { Directory.Delete(folder, recursive: true); } catch (Exception) { }
             }
-            if (!DriverInstalled("PawnIO") || !SensorReader.PawnIoReady())
+            if (!DriverInstalled("PawnIO"))
             {
                 Log.Write("install: PawnIO installation was cancelled or failed");
                 return ExitFailed;
             }
+            // Installed, but its device may only appear after a restart: the service starts using it then.
+            if (!SensorReader.PawnIoReady()) Log.Write("install: PawnIO is installed but its driver does not answer yet");
             return ExitOk;
         }
 

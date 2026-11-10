@@ -391,6 +391,92 @@ TEST(High_contrast_paints_with_system_colors) {
     CHECK(green);
 }
 
+TEST(Repainting_gives_the_same_pixels_as_painting_from_scratch) {
+    // The strip and the card are drawn over what they hold (a cached backdrop, saved bar backgrounds, pixels
+    // the render target writes in place). After any sequence of updates the bitmap must be exactly what a
+    // brand-new renderer draws for the last state: nothing of an earlier frame may survive.
+    auto same = [](const Surface& a, const Surface& b) {
+        if (a.width() != b.width() || a.height() != b.height() || !a.pixels() || !b.pixels()) return false;
+        return std::equal(a.pixels(), a.pixels() + static_cast<size_t>(a.width()) * static_cast<size_t>(a.height()),
+                          b.pixels());
+    };
+    for (UINT dpi : {96u, 144u, 192u}) {
+        for (bool light : {false, true}) {
+            // Card: values, graphs, a temperature crossing its warm mark, then a model with fewer sensors
+            // (another size) and back.
+            Card live(SharedGfx());
+            live.SetTheme(MakeTheme(light));
+            CardModel model = DemoCard(i18n::Lang::English);
+            live.Measure(dpi, model);
+            CHECK(live.Paint(model));
+            for (int step = 1; step <= 4; ++step) {
+                model = DemoCard(i18n::Lang::English);
+                model.rows[0].value = std::to_wstring(11 * step) + L"%";
+                model.rows[0].load = 0.11f * static_cast<float>(step);
+                for (float& v : model.rows[0].history) v = 0.1f * static_cast<float>(step);
+                model.rows[1].subtitle += L" · step " + std::to_wstring(step);
+                if (!model.sensors.empty()) {
+                    model.sensors[0].value = std::to_wstring(50 + 10 * step) + L" °C";
+                    model.sensors[0].gauge = 0.2f * static_cast<float>(step);
+                    model.sensors[0].level = step >= 3 ? 1 : 0;
+                }
+                if (step == 2 && !model.sensors.empty()) model.sensors.pop_back();
+                if (step == 3) model.notice = L"Version 9.9.9 available";
+                live.Measure(dpi, model);
+                CHECK(live.Paint(model));
+
+                Card fresh(SharedGfx());
+                fresh.SetTheme(MakeTheme(light));
+                // The live card never gets narrower while shown: give the fresh one the same history.
+                fresh.Measure(dpi, DemoCard(i18n::Lang::English));
+                for (int earlier = 1; earlier < step; ++earlier) {
+                    CardModel past = DemoCard(i18n::Lang::English);
+                    past.rows[1].subtitle += L" · step " + std::to_wstring(earlier);
+                    if (earlier == 2 && !past.sensors.empty()) past.sensors.pop_back();
+                    if (earlier == 3) past.notice = L"Version 9.9.9 available";
+                    fresh.Measure(dpi, past);
+                }
+                fresh.Measure(dpi, model);
+                CHECK(fresh.Paint(model));
+                if (!same(live.surface(), fresh.surface())) {
+                    t::Fail(__FILE__, __LINE__,
+                            "card at " + std::to_string(dpi) + " dpi, step " + std::to_string(step) +
+                                ": a repaint differs from a fresh paint");
+                }
+            }
+
+            // Strip: text changes, a badge appearing, hover on and off, bars moving in between.
+            const LayoutInput in{dpi, false, static_cast<int>(40 * dpi / 96)};
+            Renderer strip(SharedGfx());
+            strip.SetTheme(MakeTheme(light));
+            auto items = Sample(10, kRamTotal / 4, 5, kVramTotal / 8);
+            strip.Layout(in, items);
+            CHECK(strip.Paint(items, false));
+            for (int step = 1; step <= 5; ++step) {
+                items = Sample(10 + 17 * step, kRamTotal / 4 + static_cast<uint64_t>(step) * 3'000'000'000ull,
+                               99 - 13 * step, kVramTotal / 8);
+                const bool hover = step % 2 == 0;
+                strip.Layout(in, items);
+                CHECK(strip.Paint(items, hover));
+                auto moved = items;  // an animation frame on top: only the bars change
+                moved[0].fraction = 0.05f * static_cast<float>(step);
+                strip.Layout(in, moved);
+                CHECK(strip.Paint(moved, hover));
+
+                Renderer fresh(SharedGfx());
+                fresh.SetTheme(MakeTheme(light));
+                fresh.Layout(in, moved);
+                CHECK(fresh.Paint(moved, hover));
+                if (!same(strip.surface(), fresh.surface())) {
+                    t::Fail(__FILE__, __LINE__,
+                            "strip at " + std::to_string(dpi) + " dpi, step " + std::to_string(step) +
+                                ": a repaint differs from a fresh paint");
+                }
+            }
+        }
+    }
+}
+
 TEST(Card_has_a_transparent_shadow_and_an_opaque_body) {
     Card card(SharedGfx());
     card.SetTheme(MakeTheme(false));
@@ -725,10 +811,6 @@ TEST(Bars_drawn_without_Direct2D_look_the_same) {
     // The bars are painted by our own rasterizer (cheap animation frames): it must match Direct2D, which drew
     // them before, to within one level almost everywhere (only the antialiasing of the round ends may differ).
     const Gfx& gfx = SharedGfx();
-    auto target = CreateDcTarget(gfx.d2d());
-    ComPtr<ID2D1SolidColorBrush> brush;
-    CHECK(target && SUCCEEDED(target->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 1), &brush)));
-    if (!target || !brush) return;
     long long total = 0, close = 0;
     int worst = 0;
     const int width = 160, height = 24;
@@ -745,7 +827,10 @@ TEST(Bars_drawn_without_Direct2D_look_the_same) {
                     Surface reference, ours;
                     CHECK(reference.Ensure(width, height) && ours.Ensure(width, height));
                     for (Surface* s : {&reference, &ours}) {
-                        target->BindDC(s->dc(), &bounds);
+                        auto target = CreateSurfaceTarget(gfx.d2d(), *s);
+                        ComPtr<ID2D1SolidColorBrush> brush;
+                        CHECK(target && SUCCEEDED(target->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 1), &brush)));
+                        if (!target || !brush) return;
                         target->BeginDraw();
                         target->Clear(D2D1::ColorF(0, 0, 0, 1.0f / 255.0f));
                         if (hover) {

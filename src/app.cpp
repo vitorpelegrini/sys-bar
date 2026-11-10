@@ -6,8 +6,10 @@
 #include "trayprobe.h"
 #include "version.h"
 
+#include <dbt.h>
 #include <objbase.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <wtsapi32.h>
 
 #include <algorithm>
@@ -222,6 +224,13 @@ void ShellOpen(std::wstring target) {
     }).detach();
 }
 
+// Task Manager by its full path: a bare name would be looked for in the current directory first.
+std::wstring TaskManagerPath() {
+    wchar_t system[MAX_PATH] = {};
+    const UINT n = GetSystemDirectoryW(system, MAX_PATH);
+    return n > 0 && n < MAX_PATH ? std::wstring(system, n) + L"\\taskmgr.exe" : std::wstring(L"taskmgr.exe");
+}
+
 }  // namespace
 
 int App::Run(HINSTANCE instance) {
@@ -353,7 +362,6 @@ App::Taskbar* App::Attach(HWND tray, bool primary) {
         Log(L"CreateWindowEx(strip) failed: %lu", GetLastError());
         return nullptr;
     }
-    if (!accessibleName_.empty()) SetWindowTextW(t->bar, accessibleName_.c_str());
 
     // Layout changes of the taskbar windows are watched on their own thread (out of context).
     DWORD pid = 0;
@@ -418,9 +426,10 @@ void App::DetachAll(bool restoreTaskbar) {
         ShowWindow(cardWindow_, SW_HIDE);
         cardVisible_ = cardWanted_ = false;
         cardAlpha_ = 0.0f;
+        card_.ForgetWidth();
+        card_.ReleaseResources();
     }
     hoverBar_ = pressedBar_ = noticeBar_ = nullptr;
-    accessibleName_.clear();
 }
 
 bool App::IsAttached(const Taskbar& t) const {
@@ -514,6 +523,7 @@ void App::RequestReposition() {
 void App::Reposition() {
     repositionPending_ = false;
     if (quitting_ || !snapshot_.valid || displayOff_ || locked_) return;
+    lastReposition_ = GetTickCount64();
     // Moving Explorer's windows is a synchronous cross-thread call: messages sent to us meanwhile (an
     // Explorer restart, a setting change) must not rebuild bars_ under our feet. Run once more later.
     if (inTaskbarWork_) {
@@ -828,15 +838,12 @@ void App::RenderBar(Taskbar& t, bool force) {
     t.renderer->Present(t.bar);
 }
 
-void App::UpdateAccessibleName() {
-    // Screen readers (Narrator) read the window text of the strip.
-    if (bars_.empty()) return;
+// Screen readers (Narrator) read the window text of the strip. It is built when they ask (WM_GETTEXT) rather
+// than set on every sample, which would also broadcast a name-change event every second.
+std::wstring App::AccessibleName() const {
     std::wstring name = L"sys-bar";
     for (const ItemView& item : items_) name += L" · " + item.label + L" " + item.strong + item.weak;
-    if (name != accessibleName_) {
-        accessibleName_ = name;
-        for (const auto& t : bars_) SetWindowTextW(t->bar, name.c_str());
-    }
+    return name;
 }
 
 bool App::AnimationsAllowed() const {
@@ -898,7 +905,6 @@ void App::OnSample() {
     }
 
     Reposition();
-    UpdateAccessibleName();
     if (cardVisible_) {
         sensorDetail_.Raise();  // fans are on screen: the service keeps them at full rate
         UpdateCard(false);
@@ -963,11 +969,14 @@ void App::ApplyLanguage() {
 void App::SetPaused(bool paused) {
     sampler_.SetPaused(paused);
     if (paused) {
+        // Display off or session locked: not a single wake-up until it is back.
+        KillTimer(controller_, kHousekeepingTimer);
         KillTimer(controller_, kAnimationTimer);
         animating_ = false;
         for (auto& [key, track] : tracks_) track.shown = track.target;
         HideCard();
     } else {
+        SetCoalescableTimer(controller_, kHousekeepingTimer, kHousekeepingMs, nullptr, kHousekeepingToleranceMs);
         RequestReposition();
     }
 }
@@ -1276,6 +1285,7 @@ void App::OnCardFadeTick() {
         ShowWindow(cardWindow_, SW_HIDE);
         cardVisible_ = false;
         card_.ForgetWidth();
+        card_.ReleaseResources();  // megabytes of bitmap that are only needed while it is on screen
         return;
     }
     PresentCard();  // only re-presents the painted bitmap with a new alpha/position (cheap)
@@ -1317,11 +1327,15 @@ void App::OnUpdateState(update::State state) {
         case State::Ready: MaybeInstallUpdate(); break;
         case State::Failed:
             Log(L"update failed");
-            if (manualUpdateCheck_ || installWhenReady_) ShowNotice({});
+            // A daily check that could not reach GitHub (offline) is not news: only what the user asked for,
+            // or a download that failed, is reported.
+            showUpdateFailure_ = manualUpdateCheck_ || installWhenReady_;
+            if (showUpdateFailure_) ShowNotice({});
             manualUpdateCheck_ = installWhenReady_ = false;
             break;
         default: break;
     }
+    if (state != State::Failed) showUpdateFailure_ = false;
     if (cardVisible_) UpdateCard(false);
 }
 
@@ -1342,7 +1356,9 @@ void App::FooterUpdateStatus(CardModel& model) const {
             model.footerRight = text::Chip(icon::kUpdate, text::Format(S(i18n::Str::UpdateDownloading), {version}));
             model.footerAccent = true;
             break;
-        case State::Failed: model.footerRight = text::Chip(icon::kWarning, S(i18n::Str::UpdateFailed)); break;
+        case State::Failed:
+            if (showUpdateFailure_) model.footerRight = text::Chip(icon::kWarning, S(i18n::Str::UpdateFailed));
+            break;
         case State::UpToDate: model.footerRight = text::Chip(icon::kCheck, S(i18n::Str::CardUpToDate)); break;
         default: break;  // never checked (or checks turned off): nothing to say
     }
@@ -1406,11 +1422,13 @@ void App::RunSensorsTool(bool install) {
     // has to start from our folder, and that copy checks every file it takes (see sensors/Installer.cs).
     std::wstring tool = SensorsTool();
     if (!install) {
-        wchar_t programFiles[MAX_PATH] = {};
-        const DWORD n = GetEnvironmentVariableW(L"ProgramW6432", programFiles, MAX_PATH);
-        const std::wstring installed =
-            std::wstring(programFiles, n < MAX_PATH ? n : 0) + L"\\sys-bar\\sensors\\sys-bar-sensors.exe";
-        if (n > 0 && GetFileAttributesW(installed.c_str()) != INVALID_FILE_ATTRIBUTES) tool = installed;
+        // Asked from the system, not from an environment variable (which the user's processes can set).
+        PWSTR programFiles = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_ProgramFiles, 0, nullptr, &programFiles)) && programFiles) {
+            const std::wstring installed = std::wstring(programFiles) + L"\\sys-bar\\sensors\\sys-bar-sensors.exe";
+            if (GetFileAttributesW(installed.c_str()) != INVALID_FILE_ATTRIBUTES) tool = installed;
+        }
+        CoTaskMemFree(programFiles);
     }
     if (tool.empty()) return;
     std::thread([tool, install, controller = controller_] {
@@ -1439,6 +1457,7 @@ void App::RunSensorsTool(bool install) {
 
 void App::ShowMenu(HWND bar, POINT screen) {
     HideCard();
+    if (FindBar(bar)) noticeBar_ = bar;  // what a command has to say shows above the strip it was asked from
     HMENU menu = CreatePopupMenu();
     HMENU intervals = CreatePopupMenu();
     HMENU languages = CreatePopupMenu();
@@ -1647,7 +1666,7 @@ void App::Execute(UINT command) {
         case kCmdAutostart:
             if (!Settings::SetAutostart(!Settings::IsAutostartEnabled())) Log(L"autostart change failed");
             break;
-        case kCmdTaskManager: ShellOpen(L"taskmgr.exe"); break;
+        case kCmdTaskManager: ShellOpen(TaskManagerPath()); break;
         case kCmdAbout: ShellOpen(SYSBAR_PROJECT_URL); break;
         case kCmdExit: Quit(); break;
         case kCmdIntervalCustom: break;
@@ -1805,10 +1824,10 @@ LRESULT App::HandleController(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_TIMER:
             switch (wp) {
                 case kHousekeepingTimer:
-                    if (!displayOff_ && !locked_) {
-                        RefreshTheme(false);
-                        Reposition();
-                    }
+                    // The safety net for what no event reported. Every sample repositions too, so with the
+                    // usual one-second interval this pass has nothing left to do.
+                    RefreshTheme(false);
+                    if (GetTickCount64() - lastReposition_ >= kHousekeepingMs) Reposition();
                     break;
                 case kAnimationTimer: OnAnimationTick(); break;
                 case kCardDelayTimer:
@@ -1835,6 +1854,10 @@ LRESULT App::HandleController(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_SYSCOLORCHANGE: RefreshTheme(true); return 0;
         case WM_DISPLAYCHANGE:
         case WM_DPICHANGED: RequestReposition(); return 0;
+        case WM_DEVICECHANGE:
+            // Broadcast to every top-level window when a device arrives or leaves (a USB drive, a card).
+            if (wp == DBT_DEVNODES_CHANGED) sampler_.DisksChanged();
+            return TRUE;
         case WM_POWERBROADCAST:
             if (wp == PBT_POWERSETTINGCHANGE) {
                 const auto* setting = reinterpret_cast<const POWERBROADCAST_SETTING*>(lp);
@@ -1874,6 +1897,16 @@ LRESULT App::HandleController(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 LRESULT App::HandleBar(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
         case WM_MOUSEACTIVATE: return MA_NOACTIVATE;  // never steal focus from the app in use
+        case WM_GETTEXTLENGTH: return static_cast<LRESULT>(AccessibleName().size());
+        case WM_GETTEXT: {
+            auto* buffer = reinterpret_cast<wchar_t*>(lp);
+            if (!buffer || wp == 0) return 0;
+            const std::wstring name = AccessibleName();
+            const size_t length = std::min(name.size(), static_cast<size_t>(wp) - 1);
+            std::copy_n(name.data(), length, buffer);
+            buffer[length] = L'\0';
+            return static_cast<LRESULT>(length);
+        }
         case WM_MOUSEMOVE: {
             Taskbar* t = FindBar(hwnd);
             if (!t) return 0;
@@ -1906,7 +1939,7 @@ LRESULT App::HandleBar(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_RBUTTONDOWN: HideCard(); return 0;
         case WM_LBUTTONUP:
             // Only a click that started on this strip counts (not a drag released over it).
-            if (pressedBar_ == hwnd && settings_.clickOpensTaskManager) ShellOpen(L"taskmgr.exe");
+            if (pressedBar_ == hwnd && settings_.clickOpensTaskManager) ShellOpen(TaskManagerPath());
             pressedBar_ = nullptr;
             return 0;
         case WM_RBUTTONUP: {

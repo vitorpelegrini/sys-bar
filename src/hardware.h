@@ -62,7 +62,7 @@ struct DiskDevice {
 // for the duration of each query: a handle kept open would stop USB drives from being ejected.
 class StorageDevices {
 public:
-    void Refresh(const std::vector<int>& numbers);  // the physical drives PDH lists
+    void Refresh(const std::vector<int>& numbers);  // the physical drives DiskCounters lists
     void Close() { disks_.clear(); }
     // Reads the temperature of disk `number`. Callers only do it while the disk is active, so a
     // sleeping hard drive is never woken up just to report its temperature.
@@ -73,8 +73,51 @@ private:
     std::vector<DiskDevice> disks_;
 };
 
-// "0 C: E:" -> number 0, letters "C: E:". Returns false for "_Total" and malformed names.
-bool ParseDiskInstance(const wchar_t* name, int& number, std::wstring& letters);
+// What one physical drive is doing: Task Manager's numbers.
+struct DiskActivity {
+    int number = 0;        // \\.\PhysicalDriveN
+    std::wstring letters;  // "C: E:", in alphabetical order; empty for a drive without letters
+    double active = 0.0;   // 0..100, time the drive was not idle
+    uint64_t readBps = 0;
+    uint64_t writeBps = 0;
+};
+
+// Cumulative counters of a drive (IOCTL_DISK_PERFORMANCE), and the activity between two readings.
+struct DiskTotals {
+    int64_t idleTime = 0;   // 100 ns units
+    int64_t queryTime = 0;  // 100 ns units, when the counters were read
+    int64_t bytesRead = 0;
+    int64_t bytesWritten = 0;
+};
+void ActivityBetween(const DiskTotals& before, const DiskTotals& now, DiskActivity& out);
+
+// Activity of the physical drives straight from the disk driver: the very source of PDH's PhysicalDisk
+// counters and of Task Manager's "active time", without loading PDH. A drive is only opened for the
+// duration of each query (a handle kept open would stop USB drives from being ejected) and no I/O is sent
+// to it, so a sleeping drive stays asleep. The list of drives is read again every few seconds, when one
+// stops answering, and on Invalidate() (a device arrived or left).
+class DiskCounters {
+public:
+    std::vector<DiskActivity> Read(ULONGLONG tickMs);
+    // New baseline (after a pause): the next Read() covers the time from now on, not the pause.
+    void Prime(ULONGLONG tickMs);
+    void Invalidate() { rescan_ = true; }
+    void Close();
+
+private:
+    struct Drive {
+        int number = 0;
+        std::wstring letters;
+        DiskTotals last;
+        bool primed = false;
+    };
+    void Scan(ULONGLONG tickMs);
+    std::vector<DiskActivity> Sample(ULONGLONG tickMs, bool report);
+
+    std::vector<Drive> drives_;
+    ULONGLONG nextScan_ = 0;
+    std::atomic<bool> rescan_{true};
+};
 
 // ---- Network ------------------------------------------------------------------------------------
 struct NetInterface {

@@ -19,6 +19,7 @@ namespace SysBar.Sensors
         private static readonly TimeSpan EventRetry = TimeSpan.FromSeconds(30);
         private static readonly TimeSpan DetailWindow = TimeSpan.FromSeconds(3);  // sys-bar signals every second
         private static readonly TimeSpan PawnIoCheck = TimeSpan.FromSeconds(30);   // opened without PawnIO: is it back?
+        private static readonly TimeSpan CollectInterval = TimeSpan.FromSeconds(30);
 
         private readonly ManualResetEvent _stop = new ManualResetEvent(false);
         private readonly ManualResetEvent _never = new ManualResetEvent(false);  // stands in for a missing event
@@ -86,26 +87,31 @@ namespace SysBar.Sensors
                 TimeSpan lastWanted = Log.ToConsole ? clock.Elapsed : never;
                 TimeSpan lastRead = never, lastDetail = never, lastFansOnly = never, lastOnDemand = never;
                 TimeSpan lastPawnIoCheck = never;
+                TimeSpan lastCollect = clock.Elapsed;
 
+                WaitHandle[]? handles = null;
                 while (true)
                 {
                     // The events are (re)created until they exist: a name taken by another account only delays
                     // us, it never takes the service down.
-                    if ((wanted == null || updateRequest == null || detail == null || onDemand == null) &&
-                        clock.Elapsed - lastEventAttempt >= EventRetry)
+                    bool eventsMissing = wanted == null || updateRequest == null || detail == null || onDemand == null;
+                    if (eventsMissing && clock.Elapsed - lastEventAttempt >= EventRetry)
                     {
                         lastEventAttempt = clock.Elapsed;
                         wanted ??= SharedBlock.CreateWantedEvent();
                         updateRequest ??= SharedBlock.CreateClientEvent(SelfUpdate.UpdateEventName);
                         detail ??= SharedBlock.CreateClientEvent(SharedBlock.DetailEventName);
                         onDemand ??= SharedBlock.CreateClientEvent(SharedBlock.OnDemandEventName);
+                        eventsMissing = wanted == null || updateRequest == null || detail == null || onDemand == null;
+                        handles = null;
                     }
-                    var handles = new WaitHandle[]
+                    handles ??= new WaitHandle[]
                     {
                         _stop, (WaitHandle?)wanted ?? _never, (WaitHandle?)updateRequest ?? _never, (WaitHandle?)detail ?? _never,
                         (WaitHandle?)onDemand ?? _never,
                     };
-                    int signaled = WaitHandle.WaitAny(handles, TimeSpan.FromSeconds(1));
+                    int signaled = WaitHandle.WaitAny(handles,
+                        IdleWait(clock.Elapsed, lastWanted, reader != null, eventsMissing, Log.ToConsole));
                     if (signaled == 0) break;
                     TimeSpan now = clock.Elapsed;
                     if (signaled == 2)
@@ -156,6 +162,15 @@ namespace SysBar.Sensors
                             bool fansShown = now - lastOnDemand >= ActiveWindow || now - lastDetail < DetailWindow;
                             var (cpu, readings) = reader.Read(fansShown, fansOnly);
                             block.Publish(cpu, readings);
+                            if (now - lastCollect >= CollectInterval)
+                            {
+                                // The hardware library allocates on every reading, and the collector sizes
+                                // its budget by the CPU cache: on a large processor it lets tens of megabytes
+                                // pile up before running on its own. A collection now and then takes a few
+                                // milliseconds and keeps the service small.
+                                lastCollect = now;
+                                GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true);
+                            }
                             if (reader.OpenedWithoutPawnIo && now - lastPawnIoCheck >= PawnIoCheck)
                             {
                                 lastPawnIoCheck = now;
@@ -207,6 +222,26 @@ namespace SysBar.Sensors
             }
         }
 
+        /// <summary>
+        /// How long the loop may sleep. While a client is asking (and for a moment after) it ticks every second;
+        /// otherwise it sleeps until an event arrives, waking only for what is still owed: releasing the driver
+        /// handles a while after the last request, or trying again to create an event. With sys-bar closed, the
+        /// display off or the session locked, the service does not wake up at all.
+        /// </summary>
+        internal static TimeSpan IdleWait(TimeSpan now, TimeSpan lastWanted, bool sensorsOpen, bool eventsMissing, bool console)
+        {
+            TimeSpan tick = TimeSpan.FromSeconds(1);
+            if (console || now - lastWanted < ActiveWindow) return tick;
+            TimeSpan wait = Timeout.InfiniteTimeSpan;
+            if (sensorsOpen)
+            {
+                TimeSpan untilRelease = lastWanted + ReleaseAfter - now + tick;  // just past the release time
+                wait = untilRelease > tick ? untilRelease : tick;
+            }
+            if (eventsMissing && (wait == Timeout.InfiniteTimeSpan || wait > EventRetry)) wait = EventRetry;
+            return wait;
+        }
+
         private static void SafeDispose(IDisposable? disposable)
         {
             try
@@ -219,11 +254,27 @@ namespace SysBar.Sensors
             }
         }
 
+        [System.Runtime.InteropServices.DllImport("psapi.dll")]
+        private static extern bool EmptyWorkingSet(IntPtr process);
+
         private static SensorReader Open()
         {
             var watch = Stopwatch.StartNew();
             var reader = new SensorReader();
             Log.Write($"sensors opened in {watch.ElapsedMilliseconds} ms");
+            // Detecting the hardware allocates far more than reading it ever will: give that back now.
+            GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            try
+            {
+                using Process self = Process.GetCurrentProcess();
+                EmptyWorkingSet(self.Handle);
+            }
+            catch (Exception)
+            {
+                // Only a courtesy to the rest of the system.
+            }
             return reader;
         }
     }

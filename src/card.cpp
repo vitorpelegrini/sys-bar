@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace {
 
@@ -132,7 +133,10 @@ D2D1_COLOR_F WithAlpha(D2D1_COLOR_F c, float a) {
 }  // namespace
 
 void Card::SetTheme(const Theme& theme) {
-    if (theme.locale != theme_.locale) formats_.clear();
+    if (theme.locale != theme_.locale) {
+        formats_.clear();
+        widths_.clear();  // another language may shape the same text differently
+    }
     theme_ = theme;
 }
 
@@ -183,9 +187,7 @@ SIZE Card::Measure(UINT dpi, const CardModel& model, int maxHeightPx, int maxWid
 
     // Widest line decides the width (translations vary a lot in length).
     auto width = [&](const std::wstring& s, float size, DWRITE_FONT_WEIGHT weight) {
-        if (s.empty()) return 0.0f;
-        auto layout = Text(s, size, weight);
-        return layout ? TextWidth(layout.Get()) : 0.0f;
+        return TextWidthOf(s, size, weight);
     };
     float needed = width(model.title, kHeaderSize, DWRITE_FONT_WEIGHT_SEMI_BOLD) + kMinGap +
                    width(model.window, kSmallSize, DWRITE_FONT_WEIGHT_NORMAL);
@@ -337,6 +339,19 @@ SIZE Card::Measure(UINT dpi, const CardModel& model, int maxHeightPx, int maxWid
     return size_;
 }
 
+// Width of a text in DIPs. Remembered while the card is shown: almost every text measured for the layout is the
+// same from one second to the next (labels, and live values measured in their widest form).
+float Card::TextWidthOf(const std::wstring& text, float size, DWRITE_FONT_WEIGHT weight) {
+    if (text.empty()) return 0.0f;
+    auto key = std::make_tuple(text, static_cast<int>(size * 10.0f), static_cast<int>(weight));
+    if (const auto known = widths_.find(key); known != widths_.end()) return known->second;
+    auto layout = Text(text, size, weight);
+    const float width = layout ? TextWidth(layout.Get()) : 0.0f;
+    if (widths_.size() >= 256) widths_.clear();  // texts that do change (a fan's speed) must not pile up
+    if (layout) widths_.emplace(std::move(key), width);
+    return width;
+}
+
 ComPtr<IDWriteTextLayout> Card::Wrapped(const std::wstring& text, float size, DWRITE_FONT_WEIGHT weight, float maxWidth,
                                         float* extra) {
     if (extra) *extra = 0.0f;
@@ -361,9 +376,96 @@ float Card::TileDetailWidth() const {
     return TileWidth() - 2.0f * kTilePad;
 }
 
+void Card::ReleaseResources() {
+    target_.Reset();
+    brush_.Reset();
+    iconBrush_.Reset();
+    surface_.Release();
+    backdrop_.clear();
+    backdrop_.shrink_to_fit();
+    backdropKey_ = 0;
+    widths_.clear();
+}
+
+uint64_t Card::BackdropKey() const {
+    // FNV-1a over everything the backdrop is drawn from.
+    uint64_t h = 1469598103934665603ull;
+    auto add = [&](const void* data, size_t size) {
+        const auto* p = static_cast<const unsigned char*>(data);
+        for (size_t i = 0; i < size; ++i) h = (h ^ p[i]) * 1099511628211ull;
+    };
+    add(&size_.cx, sizeof(size_.cx));
+    add(&size_.cy, sizeof(size_.cy));
+    add(&width_, sizeof(width_));
+    add(&height_, sizeof(height_));
+    add(&scale_, sizeof(scale_));
+    add(&theme_.light, sizeof(theme_.light));
+    add(&theme_.highContrast, sizeof(theme_.highContrast));
+    add(&theme_.hcText, sizeof(theme_.hcText));
+    add(&theme_.hcBackground, sizeof(theme_.hcBackground));
+    return h == 0 ? 1 : h;
+}
+
+// Leaves the shadow, the body and the border in the bitmap: drawn when the size or the theme changed, copied
+// back otherwise.
+bool Card::PaintBackdrop() {
+    uint32_t* bits = surface_.bits();
+    if (!bits) return false;
+    const size_t pixels = static_cast<size_t>(size_.cx) * static_cast<size_t>(size_.cy);
+    const uint64_t key = BackdropKey();
+    if (key == backdropKey_ && backdrop_.size() == pixels) {
+        std::memcpy(bits, backdrop_.data(), pixels * sizeof(uint32_t));
+        return true;
+    }
+
+    target_->SetDpi(96.0f * scale_, 96.0f * scale_);
+    const bool light = theme_.light;
+    target_->BeginDraw();
+    target_->SetTransform(D2D1::Matrix3x2F::Identity());
+    target_->Clear(D2D1::ColorF(0, 0, 0, 0));
+
+    const D2D1_RECT_F card = D2D1::RectF(kShadow, kShadow, kShadow + width_, kShadow + height_);
+
+    // Soft shadow: concentric layers with decreasing opacity, slightly offset downwards.
+    if (!theme_.highContrast) {
+        for (int i = kShadowSteps; i >= 1; --i) {
+            const float t = static_cast<float>(i) / kShadowSteps;
+            const float grow = t * (kShadow - 4.0f);
+            const float alpha = (light ? 0.030f : 0.055f) * (1.0f - t) * (1.0f - t) + 0.004f;
+            brush_->SetColor(D2D1::ColorF(0, 0, 0, alpha));
+            const D2D1_RECT_F r =
+                D2D1::RectF(card.left - grow, card.top - grow + 3.0f, card.right + grow, card.bottom + grow + 3.0f);
+            target_->FillRoundedRectangle(D2D1::RoundedRect(r, kRadius + grow, kRadius + grow), brush_.Get());
+        }
+    }
+
+    // Body + hairline border (half a pixel inwards, crisp at any DPI).
+    brush_->SetColor(theme_.highContrast ? FromColorRef(theme_.hcBackground) : (light ? Rgb(0xFBFBFB) : Rgb(0x232323)));
+    target_->FillRoundedRectangle(D2D1::RoundedRect(card, kRadius, kRadius), brush_.Get());
+    const float hair = (theme_.highContrast ? 2.0f : 1.0f) / scale_;
+    brush_->SetColor(theme_.highContrast ? FromColorRef(theme_.hcText) : Ink(theme_, 0.10f));
+    const D2D1_RECT_F edge =
+        D2D1::RectF(card.left + hair / 2, card.top + hair / 2, card.right - hair / 2, card.bottom - hair / 2);
+    target_->DrawRoundedRectangle(D2D1::RoundedRect(edge, kRadius, kRadius), brush_.Get(), hair);
+
+    const HRESULT hr = target_->EndDraw();
+    if (hr == D2DERR_RECREATE_TARGET) {
+        target_.Reset();
+        brush_.Reset();
+        iconBrush_.Reset();
+        backdropKey_ = 0;
+        return false;
+    }
+    if (FAILED(hr)) return false;
+    backdrop_.assign(bits, bits + pixels);
+    backdropKey_ = key;
+    return true;
+}
+
+// The target draws straight into the surface's pixels, so it is made once they exist.
 bool Card::EnsureTarget() {
     if (target_) return true;
-    target_ = CreateDcTarget(gfx_.d2d());
+    target_ = CreateSurfaceTarget(gfx_.d2d(), surface_);
     if (!target_) return false;
     if (FAILED(target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 1), &brush_)) ||
         FAILED(target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 1), &iconBrush_))) {
@@ -459,16 +561,17 @@ void Card::DrawSparkline(const CardRow& row, int capacity, const D2D1_RECT_F& ar
     ComPtr<ID2D1GradientStopCollection> fillCollection;
     ComPtr<ID2D1LinearGradientBrush> fillBrush;
     ComPtr<ID2D1RoundedRectangleGeometry> clip;
-    ComPtr<ID2D1Layer> layer;
+    ComPtr<ID2D1PathGeometry> clipped;
+    ComPtr<ID2D1GeometrySink> clippedSink;
     if (SUCCEEDED(target_->CreateGradientStopCollection(fillStops, 6, &fillCollection)) &&
         SUCCEEDED(target_->CreateLinearGradientBrush(vertical, fillCollection.Get(), &fillBrush)) &&
         SUCCEEDED(
             factory->CreateRoundedRectangleGeometry(D2D1::RoundedRect(area, kSparkRadius, kSparkRadius), &clip)) &&
-        SUCCEEDED(target_->CreateLayer(&layer))) {
-        // Clip the area to the rounded track.
-        target_->PushLayer(D2D1::LayerParameters(area, clip.Get()), layer.Get());
-        target_->FillGeometry(fill.Get(), fillBrush.Get());
-        target_->PopLayer();
+        SUCCEEDED(factory->CreatePathGeometry(&clipped)) && SUCCEEDED(clipped->Open(&clippedSink))) {
+        // The area clipped to the rounded track, as one shape: no intermediate layer to composite.
+        const bool combined =
+            SUCCEEDED(fill->CombineWithGeometry(clip.Get(), D2D1_COMBINE_MODE_INTERSECT, nullptr, clippedSink.Get()));
+        if (SUCCEEDED(clippedSink->Close()) && combined) target_->FillGeometry(clipped.Get(), fillBrush.Get());
     }
 
     ComPtr<ID2D1GradientStopCollection> lineCollection;
@@ -710,9 +813,15 @@ void Card::DrawThermometer(const CardSensorLine& tile, float left, float right, 
 }
 
 bool Card::Paint(const CardModel& model) {
-    if (size_.cx <= 0 || !EnsureTarget() || !surface_.Ensure(size_.cx, size_.cy)) return false;
-    const RECT bounds{0, 0, size_.cx, size_.cy};
-    if (FAILED(target_->BindDC(surface_.dc(), &bounds))) return false;
+    if (size_.cx <= 0) return false;
+    if (surface_.width() != size_.cx || surface_.height() != size_.cy) {
+        // The target draws into the pixels about to be replaced.
+        target_.Reset();
+        brush_.Reset();
+        iconBrush_.Reset();
+    }
+    if (!surface_.Ensure(size_.cx, size_.cy) || !EnsureTarget()) return false;
+    if (!PaintBackdrop()) return false;
     target_->SetDpi(96.0f * scale_, 96.0f * scale_);
 
     const bool light = theme_.light;
@@ -720,33 +829,11 @@ bool Card::Paint(const CardModel& model) {
     const D2D1_COLOR_F medium = Ink(theme_, light ? 0.62f : 0.66f);
     const D2D1_COLOR_F faint = Ink(theme_, 0.46f);
 
+    // Drawn over the backdrop already in the bitmap (the target keeps what is there).
     target_->BeginDraw();
     target_->SetTransform(D2D1::Matrix3x2F::Identity());
-    target_->Clear(D2D1::ColorF(0, 0, 0, 0));
 
     const D2D1_RECT_F card = D2D1::RectF(kShadow, kShadow, kShadow + width_, kShadow + height_);
-
-    // Soft shadow: concentric layers with decreasing opacity, slightly offset downwards.
-    if (!theme_.highContrast) {
-        for (int i = kShadowSteps; i >= 1; --i) {
-            const float t = static_cast<float>(i) / kShadowSteps;
-            const float grow = t * (kShadow - 4.0f);
-            const float alpha = (light ? 0.030f : 0.055f) * (1.0f - t) * (1.0f - t) + 0.004f;
-            brush_->SetColor(D2D1::ColorF(0, 0, 0, alpha));
-            const D2D1_RECT_F r =
-                D2D1::RectF(card.left - grow, card.top - grow + 3.0f, card.right + grow, card.bottom + grow + 3.0f);
-            target_->FillRoundedRectangle(D2D1::RoundedRect(r, kRadius + grow, kRadius + grow), brush_.Get());
-        }
-    }
-
-    // Body + hairline border (half a pixel inwards, crisp at any DPI).
-    brush_->SetColor(theme_.highContrast ? FromColorRef(theme_.hcBackground) : (light ? Rgb(0xFBFBFB) : Rgb(0x232323)));
-    target_->FillRoundedRectangle(D2D1::RoundedRect(card, kRadius, kRadius), brush_.Get());
-    const float hair = (theme_.highContrast ? 2.0f : 1.0f) / scale_;
-    brush_->SetColor(theme_.highContrast ? FromColorRef(theme_.hcText) : Ink(theme_, 0.10f));
-    const D2D1_RECT_F edge =
-        D2D1::RectF(card.left + hair / 2, card.top + hair / 2, card.right - hair / 2, card.bottom - hair / 2);
-    target_->DrawRoundedRectangle(D2D1::RoundedRect(edge, kRadius, kRadius), brush_.Get(), hair);
 
     const float left = card.left + kPad;
     const float right = card.right - kPad;

@@ -2,12 +2,11 @@
 
 #include "common.h"
 #include "hardware.h"
+#include "perf.h"
 
 namespace feed {
 class SensorFeed;
 }
-
-#include <pdh.h>
 
 #include <atomic>
 #include <memory>
@@ -85,17 +84,24 @@ struct GpuEngineResult {
     bool sawAdapter = false;  // at least one instance belonged to the adapter
 };
 
+// One instance of a GPU counter, ready to be aggregated.
+struct CounterItem {
+    const wchar_t* name = nullptr;  // "pid_1234_luid_0x00000000_0x0005E13D_phys_0_eng_3_engtype_3D"
+    double value = 0.0;             // engines: utilization since the previous sample, percent
+    uint64_t large = 0;             // memory: bytes
+    bool valid = true;              // false: no value this round (a new instance has no previous reading)
+};
+
 // Aggregation of the "GPU Engine" counters (exposed for the tests).
-GpuEngineResult AggregateGpuEngines(const PDH_FMT_COUNTERVALUE_ITEM_W* items, DWORD count, const std::wstring& luidTag,
+GpuEngineResult AggregateGpuEngines(const CounterItem* items, size_t count, const std::wstring& luidTag,
                                     std::unordered_map<std::wstring_view, double>& scratch);
-uint64_t SumAdapterMemory(const PDH_FMT_COUNTERVALUE_ITEM_W* items, DWORD count, const std::wstring& luidTag,
-                          bool& sawAdapter);
+uint64_t SumAdapterMemory(const CounterItem* items, size_t count, const std::wstring& luidTag, bool& sawAdapter);
 
 // Minimum dedicated memory for a GPU to be treated as discrete (below that, VRAM is hidden).
 constexpr uint64_t kMinDedicatedVram = 256ull * 1024 * 1024;
 
 // Samples the metrics on its own thread and notifies the UI with a (coalesced) PostMessage.
-// The UI thread never waits for PDH: our window is a child of the Explorer taskbar and both
+// The UI thread never waits for a counter or a device: our window is a child of the Explorer taskbar and both
 // threads share the input queue, so any stall on the UI thread would freeze the taskbar too.
 class MetricsSampler {
 public:
@@ -118,6 +124,8 @@ public:
     // Reads the advanced sensors again now, outside the sampling cadence (the card is opening and the service
     // was just asked for fresh fans); `sensorsMessage` follows.
     void RefreshSensors();
+    // A storage device arrived or left (WM_DEVICECHANGE): the next sample lists the drives again.
+    void DisksChanged() { disksChanged_ = true; }
     SystemInfo Info() const;
 
 private:
@@ -129,21 +137,24 @@ private:
     };
 
     void Run();
-    bool OpenQuery();
-    void CloseQuery();
+    void OpenCounters();
+    void CloseCounters();
+    void Prime();
     bool SelectAdapters();
     void Collect(MetricsSnapshot& out);
     void CollectGpu(MetricsSnapshot& out, bool collected);
-    void CollectDisks(MetricsSnapshot& out, bool collected);
+    void CollectDisks(MetricsSnapshot& out);
     void CollectSensors(MetricsSnapshot& out);
+    bool ReadUtility(bool collected, double& percent);
+    bool ReadEngines(bool collected);
     bool ReadCpuFallback(double& value);
-    bool ReadArray(PDH_HCOUNTER counter, DWORD format, std::vector<BYTE>& buffer, DWORD& count);
     void AddGpuCounters();
 
     HWND notify_ = nullptr;
     UINT message_ = 0;
     UINT sensorsMessage_ = 0;
     std::atomic<bool> sensorsWanted_{false};
+    std::atomic<bool> disksChanged_{false};
     std::atomic<DWORD> intervalMs_{1000};
     std::atomic<bool> paused_{false};
     std::atomic<bool> notifyPending_{false};
@@ -156,13 +167,23 @@ private:
     SystemInfo info_;
 
     // Owned by the sampling thread.
-    PDH_HQUERY query_ = nullptr;
-    PDH_HCOUNTER cpuCounter_ = nullptr;
-    PDH_HCOUNTER gpuEngineCounter_ = nullptr;
-    PDH_HCOUNTER gpuMemoryCounter_ = nullptr;
-    PDH_HCOUNTER diskIdleCounter_ = nullptr;
-    PDH_HCOUNTER diskReadCounter_ = nullptr;
-    PDH_HCOUNTER diskWriteCounter_ = nullptr;
+    perf::Query perf_;  // CPU utility, GPU engines and GPU memory, read with one call per sample
+    int cpuUtility_ = -1, cpuUtilityBase_ = -1, gpuEngine_ = -1, gpuMemory_ = -1;  // handles in perf_
+    perf::Item lastUtility_, lastUtilityBase_;
+    bool haveUtility_ = false;
+    bool gpuCountersSearched_ = false;  // the costly search for the GPU counter sets is only made once
+    // Running time of every GPU engine instance at the previous sample: utilization is its growth.
+    struct EngineTotal {
+        std::wstring name;
+        perf::Item total;
+    };
+    std::vector<EngineTotal> engineTotals_;
+    int64_t engineTime_ = 0;  // when engineTotals_ was read (100 ns units); 0 = no baseline
+    std::unordered_map<std::wstring_view, size_t> engineIndex_;  // by name, when the instances changed order
+    std::vector<CounterItem> engineItems_;
+    std::vector<CounterItem> memoryItems_;
+    hw::DiskCounters diskCounters_;
+    int diskMisses_ = 0;             // samples in a row without any drive answering
     std::vector<Adapter> adapters_;  // physical GPUs, main (largest dedicated memory) first
     ULONGLONG nextAdapterSearch_ = 0;
     ULONGLONG nextCounterRetry_ = 0;
@@ -170,9 +191,6 @@ private:
     int adapterMisses_ = 0;
     bool gpuSeen_ = false;     // latched: GPU counters have produced data at least once
     MetricsSnapshot lastGpu_;  // last good GPU values, reused on a transient read failure
-    std::vector<BYTE> engineBuffer_;
-    std::vector<BYTE> memoryBuffer_;
-    std::vector<BYTE> diskBuffers_[3];
     hw::GpuSensors gpuSensors_;
     hw::StorageDevices storage_;
     hw::NetworkMeter network_;
@@ -181,7 +199,7 @@ private:
     std::unique_ptr<feed::SensorFeed> feed_;                  // advanced sensors service (optional)
     ULONGLONG nextServiceUpdate_ = 0;                         // next time an outdated service may be asked
     std::unordered_map<int, ULONGLONG> lastTemperatureRead_;  // disk number -> tick
-    std::wstring diskInstanceKey_;  // set of PDH disk instances; a change triggers re-enumeration
+    std::wstring diskInstanceKey_;  // the drives and their letters; a change reads the models again
     std::unordered_map<std::wstring_view, double> engines_;
     ULARGE_INTEGER lastIdle_{}, lastKernel_{}, lastUser_{};
     bool haveCpuFallback_ = false;

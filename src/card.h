@@ -2,8 +2,10 @@
 
 #include "gfx.h"
 
+#include <cstdint>
 #include <map>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -72,6 +74,8 @@ public:
     SIZE Measure(UINT dpi, const CardModel& model, int maxHeightPx = 0, int maxWidthPx = 0);
     // While the card is shown its width only grows (live values never make it jump); forget it when hidden.
     void ForgetWidth() { minWidth_ = 0.0f; }
+    // Frees the bitmap and the render target (recreated by the next Paint): for when the card is hidden.
+    void ReleaseResources();
     float SparkHeightDip() const { return sparkHeight_; }
     int ShadowMarginPx() const;
     float WidthDip() const { return width_; }
@@ -82,6 +86,9 @@ public:
 
 private:
     bool EnsureTarget();
+    bool PaintBackdrop();
+    uint64_t BackdropKey() const;
+    float TextWidthOf(const std::wstring& text, float size, DWRITE_FONT_WEIGHT weight);
     ComPtr<IDWriteTextLayout> Text(const std::wstring& text, float size, DWRITE_FONT_WEIGHT weight);
     // `iconColor` colors the inline icons; by default they take the text color.
     void DrawText(IDWriteTextLayout* layout, float x, float baseline, const D2D1_COLOR_F& color,
@@ -101,13 +108,19 @@ private:
     float Snap(float dip) const;
 
     const Gfx& gfx_;
-    ComPtr<ID2D1DCRenderTarget> target_;
+    ComPtr<ID2D1RenderTarget> target_;  // draws into surface_'s pixels: reset before they are replaced
     ComPtr<ID2D1SolidColorBrush> brush_;
     ComPtr<ID2D1SolidColorBrush> iconBrush_;  // drawing effect of inline icons (see icons.h)
     ComPtr<ID2D1StrokeStyle> roundStroke_;
     std::map<std::pair<int, int>, ComPtr<IDWriteTextFormat>> formats_;  // (size x 10, weight) -> format
     ComPtr<IDWriteTextFormat> emojiFormat_;                             // Segoe UI Emoji (thermometer ends)
     Surface surface_;
+    // Shadow, body and border as last drawn: they only change with the card's size or the theme, so each
+    // update starts from a copy instead of drawing them again (the shadow alone is fourteen large fills).
+    std::vector<uint32_t> backdrop_;
+    uint64_t backdropKey_ = 0;
+    // Widths of the texts measured while the card is shown (labels and widest-case values repeat every second).
+    std::map<std::tuple<std::wstring, int, int>, float> widths_;
     Theme theme_{};
     float scale_ = 1.0f;
     float width_ = 0.0f;     // DIPs, without the margin
