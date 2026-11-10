@@ -83,8 +83,11 @@ D2D1_COLOR_F Ink(const Theme& theme, float alpha);
 // Metric accent color, switching to amber/red at high load when enabled.
 D2D1_COLOR_F MetricColor(MetricId id, float load, const Theme& theme);
 
-// Software render target bound to a DC (grayscale text antialiasing, alpha-compatible).
-ComPtr<ID2D1DCRenderTarget> CreateDcTarget(ID2D1Factory* factory);
+// Software render target that draws straight into `surface`'s pixels (grayscale text antialiasing, premultiplied
+// alpha). A DC render target would copy the whole bitmap into Direct2D and back on every pass, which for these
+// bitmaps costs more than the drawing itself. The target is tied to those pixels: release it before the
+// surface is released or resized, and create it again afterwards.
+ComPtr<ID2D1RenderTarget> CreateSurfaceTarget(ID2D1Factory* factory, Surface& surface);
 
 float TextBaseline(IDWriteTextLayout* layout);
 float TextWidth(IDWriteTextLayout* layout);

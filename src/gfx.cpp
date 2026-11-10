@@ -1,5 +1,7 @@
 #include "gfx.h"
 
+#include <wincodec.h>
+
 #include <algorithm>
 #include <cmath>
 #include <vector>
@@ -117,13 +119,155 @@ D2D1_COLOR_F MetricColor(MetricId id, float load, const Theme& theme) {
     return Rgb(theme.light ? kLight[index] : kDark[index]);
 }
 
-ComPtr<ID2D1DCRenderTarget> CreateDcTarget(ID2D1Factory* factory) {
+namespace {
+
+// GUID_WICPixelFormat32bppPBGRA, spelled out so nothing has to be linked from the imaging library.
+constexpr GUID kPremultipliedBgra = {0x6fddc324, 0x4e03, 0x4bfe, {0xb1, 0x85, 0x3d, 0x77, 0x76, 0x8d, 0xc9, 0x10}};
+
+// A locked rectangle of the pixels.
+class PixelLock final : public IWICBitmapLock {
+public:
+    PixelLock(BYTE* data, UINT width, UINT height, UINT stride)
+        : data_(data), width_(width), height_(height), stride_(stride) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
+        if (!out) return E_POINTER;
+        if (iid == __uuidof(IUnknown) || iid == __uuidof(IWICBitmapLock)) {
+            *out = static_cast<IWICBitmapLock*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return static_cast<ULONG>(InterlockedIncrement(&refs_)); }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const LONG left = InterlockedDecrement(&refs_);
+        if (left == 0) delete this;
+        return static_cast<ULONG>(left);
+    }
+    HRESULT STDMETHODCALLTYPE GetSize(UINT* width, UINT* height) override {
+        if (!width || !height) return E_POINTER;
+        *width = width_;
+        *height = height_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetStride(UINT* stride) override {
+        if (!stride) return E_POINTER;
+        *stride = stride_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetDataPointer(UINT* size, WICInProcPointer* data) override {
+        if (!size || !data) return E_POINTER;
+        *size = height_ ? stride_ * (height_ - 1) + width_ * 4 : 0;
+        *data = data_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetPixelFormat(WICPixelFormatGUID* format) override {
+        if (!format) return E_POINTER;
+        *format = kPremultipliedBgra;
+        return S_OK;
+    }
+
+private:
+    ~PixelLock() = default;
+    LONG refs_ = 1;
+    BYTE* data_;
+    UINT width_, height_, stride_;
+};
+
+// The surface's pixels as an imaging bitmap Direct2D can render into, without owning or copying them.
+class PixelBitmap final : public IWICBitmap {
+public:
+    PixelBitmap(BYTE* data, UINT width, UINT height) : data_(data), width_(width), height_(height) {}
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void** out) override {
+        if (!out) return E_POINTER;
+        if (iid == __uuidof(IUnknown) || iid == __uuidof(IWICBitmapSource) || iid == __uuidof(IWICBitmap)) {
+            *out = static_cast<IWICBitmap*>(this);
+            AddRef();
+            return S_OK;
+        }
+        *out = nullptr;
+        return E_NOINTERFACE;
+    }
+    ULONG STDMETHODCALLTYPE AddRef() override { return static_cast<ULONG>(InterlockedIncrement(&refs_)); }
+    ULONG STDMETHODCALLTYPE Release() override {
+        const LONG left = InterlockedDecrement(&refs_);
+        if (left == 0) delete this;
+        return static_cast<ULONG>(left);
+    }
+    HRESULT STDMETHODCALLTYPE GetSize(UINT* width, UINT* height) override {
+        if (!width || !height) return E_POINTER;
+        *width = width_;
+        *height = height_;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetPixelFormat(WICPixelFormatGUID* format) override {
+        if (!format) return E_POINTER;
+        *format = kPremultipliedBgra;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE GetResolution(double* dpiX, double* dpiY) override {
+        if (!dpiX || !dpiY) return E_POINTER;
+        *dpiX = *dpiY = 96.0;
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE CopyPalette(IWICPalette*) override { return WINCODEC_ERR_PALETTEUNAVAILABLE; }
+    HRESULT STDMETHODCALLTYPE CopyPixels(const WICRect* rect, UINT stride, UINT size, BYTE* buffer) override {
+        WICRect r{0, 0, static_cast<INT>(width_), static_cast<INT>(height_)};
+        if (rect) r = *rect;
+        if (!buffer || !Inside(r) || stride < static_cast<UINT>(r.Width) * 4 ||
+            size < (r.Height ? stride * static_cast<UINT>(r.Height - 1) + static_cast<UINT>(r.Width) * 4 : 0)) {
+            return E_INVALIDARG;
+        }
+        for (INT y = 0; y < r.Height; ++y) {
+            memcpy(buffer + static_cast<size_t>(y) * stride, Row(r.X, r.Y + y), static_cast<size_t>(r.Width) * 4);
+        }
+        return S_OK;
+    }
+    HRESULT STDMETHODCALLTYPE Lock(const WICRect* rect, DWORD, IWICBitmapLock** lock) override {
+        if (!lock) return E_POINTER;
+        *lock = nullptr;
+        WICRect r{0, 0, static_cast<INT>(width_), static_cast<INT>(height_)};
+        if (rect) r = *rect;
+        if (!Inside(r)) return E_INVALIDARG;
+        *lock = new (std::nothrow)
+            PixelLock(Row(r.X, r.Y), static_cast<UINT>(r.Width), static_cast<UINT>(r.Height), width_ * 4);
+        return *lock ? S_OK : E_OUTOFMEMORY;
+    }
+    HRESULT STDMETHODCALLTYPE SetPalette(IWICPalette*) override { return E_NOTIMPL; }
+    HRESULT STDMETHODCALLTYPE SetResolution(double, double) override { return S_OK; }
+
+private:
+    ~PixelBitmap() = default;
+    bool Inside(const WICRect& r) const {
+        return r.X >= 0 && r.Y >= 0 && r.Width >= 0 && r.Height >= 0 && static_cast<UINT>(r.X) <= width_ &&
+               static_cast<UINT>(r.Y) <= height_ && static_cast<UINT>(r.Width) <= width_ - static_cast<UINT>(r.X) &&
+               static_cast<UINT>(r.Height) <= height_ - static_cast<UINT>(r.Y);
+    }
+    BYTE* Row(INT x, INT y) const { return data_ + (static_cast<size_t>(y) * width_ + static_cast<size_t>(x)) * 4; }
+
+    LONG refs_ = 1;
+    BYTE* data_;
+    UINT width_, height_;
+};
+
+}  // namespace
+
+ComPtr<ID2D1RenderTarget> CreateSurfaceTarget(ID2D1Factory* factory, Surface& surface) {
+    if (!factory || !surface.bits() || surface.width() <= 0 || surface.height() <= 0) return nullptr;
+    ComPtr<IWICBitmap> pixels;
+    pixels.Attach(new (std::nothrow)
+                      PixelBitmap(reinterpret_cast<BYTE*>(surface.bits()), static_cast<UINT>(surface.width()),
+                                  static_cast<UINT>(surface.height())));
+    if (!pixels) return nullptr;
     // Software rendering: the bitmaps are tiny, and this way we never add load to the GPU we measure.
     const D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
         D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
-        96.0f, 96.0f, D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE);
-    ComPtr<ID2D1DCRenderTarget> target;
-    if (FAILED(factory->CreateDCRenderTarget(&props, &target))) return nullptr;
+        96.0f, 96.0f);
+    ComPtr<ID2D1RenderTarget> target;
+    if (FAILED(factory->CreateWicBitmapRenderTarget(pixels.Get(), &props, &target))) return nullptr;
     // ClearType cannot be used on a transparent background.
     target->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
     return target;

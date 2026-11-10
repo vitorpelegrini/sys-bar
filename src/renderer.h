@@ -76,6 +76,7 @@ private:
         std::vector<uint32_t> barBackground;  // those pixels before the bar was drawn
     };
 
+    bool EnsureFormats();
     bool EnsureTarget();
     void ResetTarget();
     ComPtr<IDWriteTextLayout> MakeLabel(const std::wstring& text, float& baseline, float& width);
@@ -92,7 +93,7 @@ private:
     float Snap(float dip) const;
 
     const Gfx& gfx_;
-    ComPtr<ID2D1DCRenderTarget> target_;
+    ComPtr<ID2D1RenderTarget> target_;  // draws into surface_'s pixels: reset before they are replaced
     ComPtr<ID2D1SolidColorBrush> brush_;
     ComPtr<ID2D1SolidColorBrush> weakBrush_;  // drawing effect of the dimmed text
     ComPtr<IDWriteTextFormat> labelFormat_;

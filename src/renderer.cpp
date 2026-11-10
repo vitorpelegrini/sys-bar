@@ -72,35 +72,44 @@ void Renderer::ResetTarget() {
     target_.Reset();
     brush_.Reset();
     weakBrush_.Reset();
-    layoutKey_.clear();  // value layouts reference the old brush as a drawing effect
+    // Value and badge layouts reference the old brush as a drawing effect: the next Paint() makes them again.
+    for (Block& b : blocks_) {
+        b.value.Reset();
+        b.badge.Reset();
+        b.barStamp = 0;
+    }
     lastSignature_ = 0;
 }
 
+bool Renderer::EnsureFormats() {
+    if (labelFormat_ && valueFormat_) return true;
+    IDWriteFactory* dw = gfx_.dwrite();
+    // The strip only shows Latin labels and digits, so a fixed locale is fine here.
+    if (FAILED(dw->CreateTextFormat(gfx_.family().c_str(), nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                                    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, kLabelSize, L"en-us",
+                                    &labelFormat_)) ||
+        FAILED(dw->CreateTextFormat(gfx_.family().c_str(), nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                                    DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, kValueSize, L"en-us",
+                                    &valueFormat_))) {
+        labelFormat_.Reset();
+        valueFormat_.Reset();
+        return false;
+    }
+    labelFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    valueFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    return true;
+}
+
+// The target draws straight into the surface's pixels, so it is made once they exist.
 bool Renderer::EnsureTarget() {
     if (target_) return true;
-    target_ = CreateDcTarget(gfx_.d2d());
+    target_ = CreateSurfaceTarget(gfx_.d2d(), surface_);
     if (!target_) return false;
     if (FAILED(target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 1), &brush_)) ||
         FAILED(target_->CreateSolidColorBrush(D2D1::ColorF(1, 1, 1, 1), &weakBrush_))) {
         ResetTarget();
         return false;
     }
-    if (!labelFormat_) {
-        IDWriteFactory* dw = gfx_.dwrite();
-        // The strip only shows Latin labels and digits, so a fixed locale is fine here.
-        if (FAILED(dw->CreateTextFormat(gfx_.family().c_str(), nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-                                        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, kLabelSize, L"en-us",
-                                        &labelFormat_)) ||
-            FAILED(dw->CreateTextFormat(gfx_.family().c_str(), nullptr, DWRITE_FONT_WEIGHT_SEMI_BOLD,
-                                        DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, kValueSize, L"en-us",
-                                        &valueFormat_))) {
-            return false;
-        }
-        labelFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-        valueFormat_->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-    }
-    layoutKey_.clear();
-    lastSignature_ = 0;
     return true;
 }
 
@@ -154,8 +163,7 @@ ComPtr<IDWriteTextLayout> Renderer::MakeValue(const std::wstring& strong, const 
 }
 
 SIZE Renderer::Layout(const LayoutInput& input, const std::vector<ItemView>& items) {
-    // Brushes must exist before the value layouts (the dimmed brush is used as a drawing effect).
-    if (!EnsureTarget()) return size_;
+    if (!EnsureFormats()) return size_;
 
     std::wstring key =
         std::to_wstring(input.dpi) + L'|' + std::to_wstring(input.vertical) + L'|' + std::to_wstring(input.thicknessPx);
@@ -351,17 +359,17 @@ void Renderer::DrawBar(const ItemView& item, const Block& b) {
 }
 
 bool Renderer::Paint(const std::vector<ItemView>& items, bool hover, bool full) {
-    if (size_.cx <= 0 || size_.cy <= 0 || items.size() != blocks_.size()) return false;
-    if (!EnsureTarget() || layoutKey_.empty()) return false;  // target recreated: the caller re-runs Layout()
+    if (size_.cx <= 0 || size_.cy <= 0 || items.size() != blocks_.size() || layoutKey_.empty()) return false;
     const bool resized = surface_.width() != size_.cx || surface_.height() != size_.cy;
-    if (!surface_.Ensure(size_.cx, size_.cy)) return false;
+    if (resized) ResetTarget();  // it draws into the pixels about to be replaced
+    // The brushes must exist before the value layouts are made (the dimmed one is their drawing effect).
+    if (!surface_.Ensure(size_.cx, size_.cy) || !EnsureTarget()) return false;
 
     const uint64_t text = TextSignature(items, hover);
     // Animation frames only move the bars: redraw just those, the text pixels stay as they are.
     if (!full && !resized && lastSignature_ != 0 && text == lastText_) return PaintBars(items, hover);
 
     const RECT bounds{0, 0, size_.cx, size_.cy};
-    if (FAILED(target_->BindDC(surface_.dc(), &bounds))) return false;
     target_->SetDpi(96.0f * scale_, 96.0f * scale_);
 
     const bool light = theme_.light;
