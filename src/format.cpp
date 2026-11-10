@@ -3,8 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cwchar>
 #include <cwctype>
-#include <regex>
 
 namespace text {
 
@@ -41,17 +41,77 @@ std::wstring Trim(std::wstring_view s) {
     return std::wstring(s.substr(first, last - first + 1));
 }
 
+namespace {
+
+// A character of a word: letters, digits and the underscore.
+bool WordChar(wchar_t c) {
+    return std::iswalnum(c) || c == L'_';
+}
+
+bool EqualsNoCase(std::wstring_view a, std::wstring_view b) {
+    return a.size() == b.size() && _wcsnicmp(a.data(), b.data(), a.size()) == 0;
+}
+
+bool StartsWithNoCase(std::wstring_view s, std::wstring_view prefix) {
+    return s.size() >= prefix.size() && _wcsnicmp(s.data(), prefix.data(), prefix.size()) == 0;
+}
+
+}  // namespace
+
+// Written by hand rather than with <regex>, which would be the only use of it in the program (a tenth of the
+// executable, and its tables kept in memory for good, for a function that runs once).
 std::wstring CleanCpuName(const std::wstring& raw) {
-    std::wstring s = raw;
+    std::wstring_view s = raw;
     // The nominal clock is dropped: the real one changes all the time with boost.
-    if (const auto at = s.find(L'@'); at != std::wstring::npos) s.erase(at);
-    static const std::wregex noise(LR"(\((R|TM|tm|r)\)|\bCPU\b|\b\d+-Core Processor\b|\bProcessor\b)",
-                                   std::regex::icase);
-    s = std::regex_replace(s, noise, L"");
-    static const std::wregex spaces(LR"(\s{2,})");
-    s = std::regex_replace(s, spaces, L" ");
-    s = Trim(s);
-    return s.empty() ? Trim(raw) : s;
+    if (const auto at = s.find(L'@'); at != std::wstring_view::npos) s = s.substr(0, at);
+
+    std::wstring kept;
+    kept.reserve(s.size());
+    for (size_t i = 0; i < s.size();) {
+        // Trademark marks, in any case: "(R)", "(TM)".
+        if (StartsWithNoCase(s.substr(i), L"(r)")) {
+            i += 3;
+            continue;
+        }
+        if (StartsWithNoCase(s.substr(i), L"(tm)")) {
+            i += 4;
+            continue;
+        }
+        if (!WordChar(s[i]) || (i > 0 && WordChar(s[i - 1]))) {
+            kept += s[i++];
+            continue;
+        }
+        // A whole word starts here.
+        size_t end = i;
+        while (end < s.size() && WordChar(s[end])) ++end;
+        const std::wstring_view word = s.substr(i, end - i);
+        // "16-Core Processor": the card shows the thread count already.
+        constexpr std::wstring_view kCores = L"-Core Processor";
+        const bool number = std::all_of(word.begin(), word.end(), [](wchar_t c) { return c >= L'0' && c <= L'9'; });
+        if (number && StartsWithNoCase(s.substr(end), kCores) &&
+            (end + kCores.size() == s.size() || !WordChar(s[end + kCores.size()]))) {
+            i = end + kCores.size();
+            continue;
+        }
+        if (!EqualsNoCase(word, L"CPU") && !EqualsNoCase(word, L"Processor")) kept += word;
+        i = end;
+    }
+
+    // What was removed leaves runs of spaces behind: each becomes one.
+    std::wstring out;
+    out.reserve(kept.size());
+    for (size_t i = 0; i < kept.size();) {
+        if (!std::iswspace(kept[i])) {
+            out += kept[i++];
+            continue;
+        }
+        size_t end = i;
+        while (end < kept.size() && std::iswspace(kept[end])) ++end;
+        out += end - i >= 2 ? L' ' : kept[i];
+        i = end;
+    }
+    out = Trim(out);
+    return out.empty() ? Trim(raw) : out;
 }
 
 std::wstring Format(std::wstring_view pattern, std::initializer_list<std::wstring_view> args) {
