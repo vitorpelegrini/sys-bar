@@ -174,6 +174,7 @@ private:
     update::Updater updater_;
     bool manualUpdateCheck_ = false;  // the user asked: report the result
     bool installWhenReady_ = false;   // the user asked to install (or auto-update is on)
+    bool showUpdateFailure_ = false;  // the failure is news (asked for, or a download): the footer says so
     std::wstring notice_;             // transient message shown in the card
     ULONGLONG noticeUntil_ = 0;
     MetricsSnapshot snapshot_;

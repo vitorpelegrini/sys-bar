@@ -8,6 +8,7 @@
 
 #include <objbase.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <wtsapi32.h>
 
 #include <algorithm>
@@ -220,6 +221,13 @@ void ShellOpen(std::wstring target) {
         if (!ShellExecuteExW(&info)) Log(L"ShellExecuteEx(%s) failed: %lu", target.c_str(), GetLastError());
         if (SUCCEEDED(hr)) CoUninitialize();
     }).detach();
+}
+
+// Task Manager by its full path: a bare name would be looked for in the current directory first.
+std::wstring TaskManagerPath() {
+    wchar_t system[MAX_PATH] = {};
+    const UINT n = GetSystemDirectoryW(system, MAX_PATH);
+    return n > 0 && n < MAX_PATH ? std::wstring(system, n) + L"\\taskmgr.exe" : std::wstring(L"taskmgr.exe");
 }
 
 }  // namespace
@@ -1317,11 +1325,15 @@ void App::OnUpdateState(update::State state) {
         case State::Ready: MaybeInstallUpdate(); break;
         case State::Failed:
             Log(L"update failed");
-            if (manualUpdateCheck_ || installWhenReady_) ShowNotice({});
+            // A daily check that could not reach GitHub (offline) is not news: only what the user asked for,
+            // or a download that failed, is reported.
+            showUpdateFailure_ = manualUpdateCheck_ || installWhenReady_;
+            if (showUpdateFailure_) ShowNotice({});
             manualUpdateCheck_ = installWhenReady_ = false;
             break;
         default: break;
     }
+    if (state != State::Failed) showUpdateFailure_ = false;
     if (cardVisible_) UpdateCard(false);
 }
 
@@ -1342,7 +1354,9 @@ void App::FooterUpdateStatus(CardModel& model) const {
             model.footerRight = text::Chip(icon::kUpdate, text::Format(S(i18n::Str::UpdateDownloading), {version}));
             model.footerAccent = true;
             break;
-        case State::Failed: model.footerRight = text::Chip(icon::kWarning, S(i18n::Str::UpdateFailed)); break;
+        case State::Failed:
+            if (showUpdateFailure_) model.footerRight = text::Chip(icon::kWarning, S(i18n::Str::UpdateFailed));
+            break;
         case State::UpToDate: model.footerRight = text::Chip(icon::kCheck, S(i18n::Str::CardUpToDate)); break;
         default: break;  // never checked (or checks turned off): nothing to say
     }
@@ -1406,11 +1420,13 @@ void App::RunSensorsTool(bool install) {
     // has to start from our folder, and that copy checks every file it takes (see sensors/Installer.cs).
     std::wstring tool = SensorsTool();
     if (!install) {
-        wchar_t programFiles[MAX_PATH] = {};
-        const DWORD n = GetEnvironmentVariableW(L"ProgramW6432", programFiles, MAX_PATH);
-        const std::wstring installed =
-            std::wstring(programFiles, n < MAX_PATH ? n : 0) + L"\\sys-bar\\sensors\\sys-bar-sensors.exe";
-        if (n > 0 && GetFileAttributesW(installed.c_str()) != INVALID_FILE_ATTRIBUTES) tool = installed;
+        // Asked from the system, not from an environment variable (which the user's processes can set).
+        PWSTR programFiles = nullptr;
+        if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_ProgramFiles, 0, nullptr, &programFiles)) && programFiles) {
+            const std::wstring installed = std::wstring(programFiles) + L"\\sys-bar\\sensors\\sys-bar-sensors.exe";
+            if (GetFileAttributesW(installed.c_str()) != INVALID_FILE_ATTRIBUTES) tool = installed;
+        }
+        CoTaskMemFree(programFiles);
     }
     if (tool.empty()) return;
     std::thread([tool, install, controller = controller_] {
@@ -1439,6 +1455,7 @@ void App::RunSensorsTool(bool install) {
 
 void App::ShowMenu(HWND bar, POINT screen) {
     HideCard();
+    if (FindBar(bar)) noticeBar_ = bar;  // what a command has to say shows above the strip it was asked from
     HMENU menu = CreatePopupMenu();
     HMENU intervals = CreatePopupMenu();
     HMENU languages = CreatePopupMenu();
@@ -1647,7 +1664,7 @@ void App::Execute(UINT command) {
         case kCmdAutostart:
             if (!Settings::SetAutostart(!Settings::IsAutostartEnabled())) Log(L"autostart change failed");
             break;
-        case kCmdTaskManager: ShellOpen(L"taskmgr.exe"); break;
+        case kCmdTaskManager: ShellOpen(TaskManagerPath()); break;
         case kCmdAbout: ShellOpen(SYSBAR_PROJECT_URL); break;
         case kCmdExit: Quit(); break;
         case kCmdIntervalCustom: break;
@@ -1906,7 +1923,7 @@ LRESULT App::HandleBar(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_RBUTTONDOWN: HideCard(); return 0;
         case WM_LBUTTONUP:
             // Only a click that started on this strip counts (not a drag released over it).
-            if (pressedBar_ == hwnd && settings_.clickOpensTaskManager) ShellOpen(L"taskmgr.exe");
+            if (pressedBar_ == hwnd && settings_.clickOpensTaskManager) ShellOpen(TaskManagerPath());
             pressedBar_ = nullptr;
             return 0;
         case WM_RBUTTONUP: {

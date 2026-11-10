@@ -39,7 +39,11 @@ std::optional<std::string> ParseSha256File(std::string_view text, std::wstring_v
 bool SameDirectory(std::wstring_view a, std::wstring_view b);
 // SHA-256 of a file as lowercase hex (Windows CNG).
 std::optional<std::string> Sha256OfFile(const std::wstring& path);
-std::optional<std::string> Sha256OfHandle(HANDLE file);  // from the start of an open file
+std::optional<std::string> Sha256OfHandle(HANDLE file);  // from the start of an open file; `file` stays open
+// Deletes the "sys-bar-update-*" folders earlier updates left in `tempDir` (which ends with a backslash): an
+// installer cannot remove the folder it runs from. `keepDir` (may be empty) is left alone. Returns how many
+// folders went away.
+int RemoveOldDownloads(const std::wstring& tempDir, const std::wstring& keepDir);
 
 // ---- Updater ----------------------------------------------------------------------------------------
 
@@ -92,6 +96,7 @@ private:
     mutable std::mutex mutex_;
     std::optional<Release> latest_;
     std::wstring installerPath_;
+    std::atomic<ULONGLONG> installStarted_{0};  // tick of Install(): an installer that never closes us times out
     HANDLE installerFile_ = INVALID_HANDLE_VALUE;  // keeps the verified installer from being changed until it runs
     Cancel cancel_;
     std::thread worker_;

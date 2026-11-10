@@ -20,6 +20,8 @@ constexpr wchar_t kUninstallKey[] =
 constexpr uint64_t kMaxJsonBytes = 1u << 20;        // 1 MB
 constexpr uint64_t kMaxInstallerBytes = 64u << 20;  // 64 MB
 constexpr int kTimeoutMs = 15000;
+constexpr ULONGLONG kInstallTimeoutMs = 10 * 60 * 1000;  // an installer normally closes us within seconds
+constexpr wchar_t kDownloadPrefix[] = L"sys-bar-update-";
 
 std::wstring Lower(std::wstring_view s) {
     std::wstring out(s);
@@ -204,8 +206,7 @@ std::optional<std::string> Sha256OfHandle(HANDLE file) {
     }
     if (hash) BCryptDestroyHash(hash);
     if (algorithm) BCryptCloseAlgorithmProvider(algorithm, 0);
-    CloseHandle(file);
-    return result;
+    return result;  // the handle stays the caller's: the updater keeps the verified installer locked with it
 }
 
 // ---- Pure helpers -------------------------------------------------------------------------------------
@@ -297,6 +298,35 @@ bool SameDirectory(std::wstring_view a, std::wstring_view b) {
     return !x.empty() && x == y;
 }
 
+int RemoveOldDownloads(const std::wstring& tempDir, const std::wstring& keepDir) {
+    int removed = 0;
+    WIN32_FIND_DATAW entry{};
+    const HANDLE find = FindFirstFileW((tempDir + kDownloadPrefix + L"*").c_str(), &entry);
+    if (find == INVALID_HANDLE_VALUE) return 0;
+    do {
+        // Real folders only: a link is never followed.
+        if (!(entry.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+            (entry.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+            continue;
+        }
+        const std::wstring dir = tempDir + entry.cFileName;
+        if (SameDirectory(dir, keepDir)) continue;
+        WIN32_FIND_DATAW file{};
+        const HANDLE inner = FindFirstFileW((dir + L"\\*").c_str(), &file);
+        if (inner != INVALID_HANDLE_VALUE) {
+            do {
+                if (!(file.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) {
+                    DeleteFileW((dir + L"\\" + file.cFileName).c_str());  // fails while it still runs: next time
+                }
+            } while (FindNextFileW(inner, &file));
+            FindClose(inner);
+        }
+        if (RemoveDirectoryW(dir.c_str())) ++removed;
+    } while (FindNextFileW(find, &entry));
+    FindClose(find);
+    return removed;
+}
+
 // ---- Updater -----------------------------------------------------------------------------------------
 
 Updater::~Updater() {
@@ -345,6 +375,11 @@ bool Updater::Run(void (Updater::*job)(), State busy) {
 
 void Updater::Check() {
     if (state_ == State::Ready) return;  // already downloaded: nothing new to learn
+    // An installer that never closed us (blocked, crashed) must not stop every later check.
+    State installing = State::Installing;
+    if (GetTickCount64() - installStarted_.load() >= kInstallTimeoutMs) {
+        state_.compare_exchange_strong(installing, State::Failed);
+    }
     Run(&Updater::DoCheck, State::Checking);
 }
 
@@ -354,6 +389,19 @@ void Updater::Download() {
 }
 
 void Updater::DoCheck() {
+    // Installers of earlier updates are still in %TEMP%: the one that brought this version included.
+    {
+        wchar_t temp[MAX_PATH] = {};
+        const DWORD length = GetTempPathW(MAX_PATH, temp);
+        std::wstring keep;
+        {
+            std::lock_guard lock(mutex_);
+            if (const size_t slash = installerPath_.find_last_of(L'\\'); slash != std::wstring::npos) {
+                keep = installerPath_.substr(0, slash);
+            }
+        }
+        if (length > 0 && length < MAX_PATH) RemoveOldDownloads(temp, keep);
+    }
     std::string body;
     const std::wstring agent = L"sys-bar/" + current_;
     std::optional<Release> release;
@@ -390,7 +438,7 @@ void Updater::DoDownload() {
     const DWORD tempLength = GetTempPathW(MAX_PATH, temp);
     const std::wstring guid = NewGuid();
     if (tempLength == 0 || tempLength >= MAX_PATH || guid.empty()) return SetState(State::Failed);
-    const std::wstring dir = std::wstring(temp) + L"sys-bar-update-" + guid;
+    const std::wstring dir = std::wstring(temp) + kDownloadPrefix + guid;
     if (!CreateDirectoryW(dir.c_str(), nullptr)) return SetState(State::Failed);
     const std::wstring path = dir + L"\\" + release->setupName;
     HANDLE file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -448,6 +496,7 @@ bool Updater::Install() {
         if (installerFile_ != INVALID_HANDLE_VALUE) CloseHandle(installerFile_);
         installerFile_ = INVALID_HANDLE_VALUE;
     }
+    installStarted_ = GetTickCount64();
     state_ = State::Installing;
     return true;
 }
